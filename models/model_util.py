@@ -183,10 +183,11 @@ def placeholder_inputs(batch_size, num_point):
     heading_residual_label_pl = tf.placeholder(tf.float32, shape=(batch_size,))
     size_class_label_pl = tf.placeholder(tf.int32, shape=(batch_size,))
     size_residual_label_pl = tf.placeholder(tf.float32, shape=(batch_size,3))
-
+    size_box2d_pl = tf.placeholder(tf.float32, shape=(batch_size,2))
+    
     return pointclouds_pl, one_hot_vec_pl, labels_pl, centers_pl, \
         heading_class_label_pl, heading_residual_label_pl, \
-        size_class_label_pl, size_residual_label_pl
+        size_class_label_pl, size_residual_label_pl, size_box2d_pl
 
 
 def point_cloud_masking(point_cloud, logits, end_points, xyz_only=True):
