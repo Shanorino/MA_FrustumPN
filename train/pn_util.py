@@ -28,10 +28,10 @@ from model_util import NUM_HEADING_BIN, NUM_SIZE_CLUSTER, g_type_mean_size
 
 # Set training configurations
 BATCH_SIZE = 32
-MODEL_PATH = '/localhome/sxu/Desktop/MA/frustum-pointnets-master/train/log_v1/model.ckpt'
+MODEL_PATH = '/localhome/sxu/Desktop/MA/frustum-pointnets-master/train/log_tiny1_100/model.ckpt'
 GPU_INDEX = 0
 NUM_POINT = 1024
-MODEL = importlib.import_module('frustum_pointnets_v1')
+MODEL = importlib.import_module('frustum_pointnets_v1_tiny1')
 NUM_CLASSES = 2
 NUM_CHANNEL = 3
 
@@ -43,10 +43,10 @@ def get_session_and_ops(batch_size, num_point):
         with tf.device('/gpu:'+str(GPU_INDEX)):
             pointclouds_pl, one_hot_vec_pl, labels_pl, centers_pl, \
             heading_class_label_pl, heading_residual_label_pl, \
-            size_class_label_pl, size_residual_label_pl = \
+            size_class_label_pl, size_residual_label_pl, size_box2d_pl = \
                 MODEL.placeholder_inputs(batch_size, num_point)
             is_training_pl = tf.placeholder(tf.bool, shape=())
-            end_points = MODEL.get_model(pointclouds_pl, one_hot_vec_pl,
+            end_points = MODEL.get_model(pointclouds_pl, size_box2d_pl, one_hot_vec_pl,
                 is_training_pl)
             loss = MODEL.get_loss(labels_pl, centers_pl,
                 heading_class_label_pl, heading_residual_label_pl,
@@ -63,6 +63,7 @@ def get_session_and_ops(batch_size, num_point):
         saver.restore(sess, MODEL_PATH)
         ops = {'pointclouds_pl': pointclouds_pl,
                'one_hot_vec_pl': one_hot_vec_pl,
+               'size_box2d_pl': size_box2d_pl,
                'labels_pl': labels_pl,
                'centers_pl': centers_pl,
                'heading_class_label_pl': heading_class_label_pl,
@@ -85,7 +86,7 @@ def softmax(x):
     return probs
 
 
-def inference(sess, ops, pc, one_hot_vec, batch_size):
+def inference(sess, ops, pc, one_hot_vec, box2d, batch_size):
     ''' Run inference for frustum pointnets in batch mode '''
     assert pc.shape[0]%batch_size == 0
     num_batches = pc.shape[0]/batch_size
@@ -102,6 +103,7 @@ def inference(sess, ops, pc, one_hot_vec, batch_size):
         feed_dict = {\
             ops['pointclouds_pl']: pc[i*batch_size:(i+1)*batch_size,...],
             ops['one_hot_vec_pl']: one_hot_vec[i*batch_size:(i+1)*batch_size,:],
+            ops['size_box2d_pl']: box2d[i*batch_size:(i+1)*batch_size,:],
             ops['is_training_pl']: False}
         
         t1 = time.time()
@@ -161,16 +163,7 @@ def test_segmentation(input_pc, input_centroid, sess, ops):
     ''' Test segmentation pointents with frustum point clouds.
         load PointCloud from a VTK file
     '''
-    ps_list = []
-    segp_list = []
-    center_list = []
-    heading_cls_list = []
-    heading_res_list = []
-    size_cls_list = []
-    size_res_list = []
-    rot_angle_list = []
-    score_list = []
-    onehot_list = []
+    vertices_list = []
 
     # load PointCloud here
 #    import vtk
@@ -185,16 +178,18 @@ def test_segmentation(input_pc, input_centroid, sess, ops):
 #    pc = np.asarray(np_pts).squeeze() # numPoints x 3
     
     if input_pc is None:
-        pc = np.fromfile("/localhome/sxu/Desktop/MA/frustum-pointnets-master/dataset/xtion/kinect3.bin", dtype=np.float).reshape(-1, 3)
+        pc = np.fromfile("/localhome/sxu/Desktop/MA/frustum-pointnets-master/dataset/xtion/rsPC1.bin", dtype=np.float).reshape(-1, 3)
     else:
-        pc = input_pc
+        pc = input_pc[0, :, :]
     # Down sample the PointCloud
-#    pc = pc[np.where(pc[:,0]<3.5)]
+#    pc = pc[np.where(pc[:,1]<0)]
 #    pc = pc[np.where(pc[:,2]>-1.6)]
-    pc = pc[np.random.randint(pc.shape[0], size=2048), 0:3] #10%: size=int(pc.shape[0]/10)
+#    pc[:,0] += 10
+    
+#    pc = pc[np.random.randint(pc.shape[0], size=1024), 0:3] #10%: size=int(pc.shape[0]/10)
     # Get 3d centroid from 2d detection
     if input_centroid is None:
-        pc_centroid = np.fromfile("/localhome/sxu/Desktop/MA/frustum-pointnets-master/dataset/xtion/kinect_centroid3.bin", dtype=np.float).reshape(-1, 3)
+        pc_centroid = np.fromfile("/localhome/sxu/Desktop/MA/frustum-pointnets-master/dataset/xtion/rsCentroid1.bin", dtype=np.float).reshape(-1, 3)
     else:
         pc_centroid = input_centroid
     # Manual calibration
@@ -202,6 +197,7 @@ def test_segmentation(input_pc, input_centroid, sess, ops):
     utils = module_from_file("utils", "/localhome/sxu/Desktop/MA/frustum-pointnets-master/kitti/kitti_util.py")
 #    viz_util = module_from_file("viz_util", "/localhome/sxu/Desktop/MA/frustum-pointnets-master/mayavi/viz_util.py")
     cali = utils.Calibration('/localhome/sxu/Desktop/MA/frustum-pointnets-master/dataset/KITTI/object/training/calib/000002.txt')
+    
     t0 = time.time()
     pc_rect = cali.project_velo_to_rect(pc[:,0:3])
     pc_centroid_rect = cali.project_velo_to_rect(pc_centroid[:,0:3])
@@ -209,9 +205,9 @@ def test_segmentation(input_pc, input_centroid, sess, ops):
     pc = frustumRotation(pc, pc_centroid, "z")
     pc_rect = frustumRotation(pc_rect, pc_centroid_rect, "y")
     
-    # calculate heading angle (to rotate) (right-handed axis)
-    frustum_angle = (-1 * np.arctan2(pc_centroid_rect[0, 2], pc_centroid_rect[0, 0])  +  np.pi/2)
-    
+    # calculate heading angle (to rotate) (for the 3d bounding box) (right-handed axis)
+#    frustum_angle = (-1 * np.arctan2(pc_centroid_rect[0, 2], pc_centroid_rect[0, 0])  +  np.pi/2) 
+    frustum_angle = (-1 * np.arctan2(pc_centroid[0, 0], pc_centroid[0, 1])  +  np.pi/2) 
 #    # For the rect coord: rotate along y
 #    cosval = np.cos(frustum_angle)
 #    sinval = np.sin(frustum_angle)
@@ -223,7 +219,7 @@ def test_segmentation(input_pc, input_centroid, sess, ops):
     
     #pc[:, 0] = -pc[:, 0]
     #pc[:, 1] = -pc[:, 1]
-#    pc_rect[:, 2] = pc_rect[:, 2]
+#    pc_rect[:, 2] = pc_rect[:, 2] + 10
     
     # to feed the tf model
     pc_rect = np.expand_dims(pc_rect, 0)
@@ -236,6 +232,7 @@ def test_segmentation(input_pc, input_centroid, sess, ops):
     # hand-made data
     batch_data_to_feed = np.zeros((1, pc_rect.shape[1], 3))
     batch_one_hot_to_feed = np.zeros((batch_size, 3))
+    batch_yolo_to_feed = np.zeros((batch_size,2))
 #    sess, ops = get_session_and_ops(batch_size=batch_size, num_point=pc_rect.shape[1])
     
     for batch_idx in range(1):
@@ -246,9 +243,11 @@ def test_segmentation(input_pc, input_centroid, sess, ops):
 
         batch_data = pc_rect  # problems: 1.centroid 2.scale
         batch_one_hot_vec = np.asarray([0,1,0]) #pedestrian
+        batch_yolo = np.asarray([352,376])
+        
         batch_data_to_feed[0,...] = batch_data
         batch_one_hot_to_feed[0,:] = batch_one_hot_vec
-        
+        batch_yolo_to_feed[0,:] = batch_yolo
 #        t1 = time.time()
         
         # Run one batch inference
@@ -256,10 +255,10 @@ def test_segmentation(input_pc, input_centroid, sess, ops):
             batch_hclass_pred, batch_hres_pred, \
             batch_sclass_pred, batch_sres_pred, batch_scores = \
                 inference(sess, ops, batch_data_to_feed,
-                    batch_one_hot_to_feed, batch_size=batch_size)
+                    batch_one_hot_to_feed, batch_yolo_to_feed, batch_size=batch_size)
     print("Inference done;")
     print("Inference + rectifying in {:.2f}s".format(time.time() - t0))
-    print("Batch segmentation logits: ", batch_output)
+#    print("Batch segmentation logits: ", batch_output)
     if (1 not in batch_output):
         print("Segmentation failed: no pedestrain found!")
         return
@@ -267,67 +266,82 @@ def test_segmentation(input_pc, input_centroid, sess, ops):
         print("Pedestrain found! Number of points: ", (batch_output==1).sum()) #(pc[0,:,2]<4).sum())
         print("Batch predicted center (in rect cam): ", batch_center_pred)
         print("Batch predicted center (in kinect): ", cali.project_rect_to_velo(batch_center_pred))
+        print("Batch heading angle(degree): ", batch_sclass_pred*30, "+", batch_hres_pred)
         boxParams = g_type_mean_size['Pedestrian'] + batch_sres_pred[0]  # could be wrong here?
         print(boxParams)
         idx = np.where(batch_output==1)[1]
-        fig = pyplot.figure()
-        ax = fig.add_subplot(1, 2, 1, projection='3d')
-        bx = fig.add_subplot(1, 2, 2, projection='3d')
         # Generate the values
         x_vals = pc[ idx, 0]
         y_vals = pc[ idx, 1]
         z_vals = pc[ idx, 2]
 
-        # Plot the values (masked)
-        ax.scatter(x_vals, y_vals, z_vals, c = 'b', marker='o')
         # Draw 3D box
-        vertices = get3dBoxVertices(cali.project_rect_to_velo(batch_center_pred), boxParams, -frustum_angle)
-        print ("Frustum angle in rect: ", frustum_angle)
+        vertices = get3dBoxVertices(cali.project_rect_to_velo(batch_center_pred), boxParams, -frustum_angle, np.pi/6 * batch_hclass_pred[0])
+#        print ("vertices: ", vertices)
+#        print ("Frustum angle in rect: ", frustum_angle)
 #        vertices = get3dBoxVertices(cali.project_rect_to_velo(batch_center_pred), boxParams, np.pi/6 * batch_hclass_pred[0] + batch_hres_pred[0])
+        
+        visualizePNwithBox(x_vals, y_vals, z_vals, pc, vertices, True)
 
-        ax.plot([vertices[0][0], vertices[1][0]], [vertices[0][1], vertices[1][1]], [vertices[0][2], vertices[1][2]], c='r')
-        ax.plot([vertices[1][0], vertices[2][0]], [vertices[1][1], vertices[2][1]], [vertices[1][2], vertices[2][2]], c='r')
-        ax.plot([vertices[2][0], vertices[3][0]], [vertices[2][1], vertices[3][1]], [vertices[2][2], vertices[3][2]], c='r')
-        ax.plot([vertices[3][0], vertices[0][0]], [vertices[3][1], vertices[0][1]], [vertices[3][2], vertices[0][2]], c='r')
+def visualizePNwithBox(masked_x, masked_y, masked_z, pc, vertices, draw=False):
+    fig = pyplot.figure()
+    pyplot.ion()
+    pyplot.show()
+    ax = fig.add_subplot(1, 2, 1, projection='3d')
+    bx = fig.add_subplot(1, 2, 2, projection='3d')
+    ax.scatter(masked_x, masked_y, masked_z, c = 'r', marker='o')
+    ax.plot([vertices[0][0], vertices[1][0]], [vertices[0][1], vertices[1][1]], [vertices[0][2], vertices[1][2]], c='r')
+    ax.plot([vertices[1][0], vertices[2][0]], [vertices[1][1], vertices[2][1]], [vertices[1][2], vertices[2][2]], c='r')
+    ax.plot([vertices[2][0], vertices[3][0]], [vertices[2][1], vertices[3][1]], [vertices[2][2], vertices[3][2]], c='r')
+    ax.plot([vertices[3][0], vertices[0][0]], [vertices[3][1], vertices[0][1]], [vertices[3][2], vertices[0][2]], c='r')
+    
+    ax.plot([vertices[4][0], vertices[5][0]], [vertices[4][1], vertices[5][1]], [vertices[4][2], vertices[5][2]], c='r')
+    ax.plot([vertices[5][0], vertices[6][0]], [vertices[5][1], vertices[6][1]], [vertices[5][2], vertices[6][2]], c='r')
+    ax.plot([vertices[6][0], vertices[7][0]], [vertices[6][1], vertices[7][1]], [vertices[6][2], vertices[7][2]], c='r')
+    ax.plot([vertices[7][0], vertices[4][0]], [vertices[7][1], vertices[4][1]], [vertices[7][2], vertices[4][2]], c='r')
+    
+    ax.plot([vertices[0][0], vertices[4][0]], [vertices[0][1], vertices[4][1]], [vertices[0][2], vertices[4][2]], c='r')
+    ax.plot([vertices[1][0], vertices[5][0]], [vertices[1][1], vertices[5][1]], [vertices[1][2], vertices[5][2]], c='r')
+    ax.plot([vertices[2][0], vertices[6][0]], [vertices[2][1], vertices[6][1]], [vertices[2][2], vertices[6][2]], c='r')
+    ax.plot([vertices[3][0], vertices[7][0]], [vertices[3][1], vertices[7][1]], [vertices[3][2], vertices[7][2]], c='r')
+    
+    ax.set_xlabel('X-axis')
+    ax.set_ylabel('Y-axis')
+    ax.set_zlabel('Z-axis')
+    
+    bx.scatter(pc[:, 0], pc[:, 1], pc[:, 2], c = 'b', marker='o')
         
-        ax.plot([vertices[4][0], vertices[5][0]], [vertices[4][1], vertices[5][1]], [vertices[4][2], vertices[5][2]], c='r')
-        ax.plot([vertices[5][0], vertices[6][0]], [vertices[5][1], vertices[6][1]], [vertices[5][2], vertices[6][2]], c='r')
-        ax.plot([vertices[6][0], vertices[7][0]], [vertices[6][1], vertices[7][1]], [vertices[6][2], vertices[7][2]], c='r')
-        ax.plot([vertices[7][0], vertices[4][0]], [vertices[7][1], vertices[4][1]], [vertices[7][2], vertices[4][2]], c='r')
-        
-        ax.plot([vertices[0][0], vertices[4][0]], [vertices[0][1], vertices[4][1]], [vertices[0][2], vertices[4][2]], c='r')
-        ax.plot([vertices[1][0], vertices[5][0]], [vertices[1][1], vertices[5][1]], [vertices[1][2], vertices[5][2]], c='r')
-        ax.plot([vertices[2][0], vertices[6][0]], [vertices[2][1], vertices[6][1]], [vertices[2][2], vertices[6][2]], c='r')
-        ax.plot([vertices[3][0], vertices[7][0]], [vertices[3][1], vertices[7][1]], [vertices[3][2], vertices[7][2]], c='r')
-        
-        ax.set_xlabel('X-axis')
-        ax.set_ylabel('Y-axis')
-        ax.set_zlabel('Z-axis')
-
-        # Plot the original point cloud
-        bx.scatter(pc[:, 0], pc[:, 1], pc[:, 2], c = 'b', marker='o')
-        bx.set_xlabel('X-axis')
-        bx.set_ylabel('Y-axis')
-        bx.set_zlabel('Z-axis')
-        pyplot.show()
+    bx.plot([vertices[0][0], vertices[1][0]], [vertices[0][1], vertices[1][1]], [vertices[0][2], vertices[1][2]], c='r')
+    bx.plot([vertices[1][0], vertices[2][0]], [vertices[1][1], vertices[2][1]], [vertices[1][2], vertices[2][2]], c='r')
+    bx.plot([vertices[2][0], vertices[3][0]], [vertices[2][1], vertices[3][1]], [vertices[2][2], vertices[3][2]], c='r')
+    bx.plot([vertices[3][0], vertices[0][0]], [vertices[3][1], vertices[0][1]], [vertices[3][2], vertices[0][2]], c='r')
+    
+    bx.plot([vertices[4][0], vertices[5][0]], [vertices[4][1], vertices[5][1]], [vertices[4][2], vertices[5][2]], c='r')
+    bx.plot([vertices[5][0], vertices[6][0]], [vertices[5][1], vertices[6][1]], [vertices[5][2], vertices[6][2]], c='r')
+    bx.plot([vertices[6][0], vertices[7][0]], [vertices[6][1], vertices[7][1]], [vertices[6][2], vertices[7][2]], c='r')
+    bx.plot([vertices[7][0], vertices[4][0]], [vertices[7][1], vertices[4][1]], [vertices[7][2], vertices[4][2]], c='r')
+    
+    bx.plot([vertices[0][0], vertices[4][0]], [vertices[0][1], vertices[4][1]], [vertices[0][2], vertices[4][2]], c='r')
+    bx.plot([vertices[1][0], vertices[5][0]], [vertices[1][1], vertices[5][1]], [vertices[1][2], vertices[5][2]], c='r')
+    bx.plot([vertices[2][0], vertices[6][0]], [vertices[2][1], vertices[6][1]], [vertices[2][2], vertices[6][2]], c='r')
+    bx.plot([vertices[3][0], vertices[7][0]], [vertices[3][1], vertices[7][1]], [vertices[3][2], vertices[7][2]], c='r')
+    bx.set_xlabel('X-axis')
+    bx.set_ylabel('Y-axis')
+    bx.set_zlabel('Z-axis')
+    
+    ax.view_init(elev=20., azim=200)
+    bx.view_init(elev=20., azim=200)
+    
+    if (draw):
+        pyplot.draw()
+        pyplot.pause(1)
+#        input ("press ENTER to continue")
         pyplot.close()
-#        input("PRESS ENTER TO CONTINUE")
-#    print("Batch predicted center (in rect cam): ", batch_center_pred)
-#    print("Batch predicted center (in kinect): ", cali.project_rect_to_velo(batch_center_pred))
-        
-        
-#    # write segmented PointCloud into a txt file   ---- only in debug mode ----
-#    pc = pc.squeeze()
-#    for i in range(pc.shape[1]):
-#        for j in range(3):
-#            pc[i, j] = pc[i, j] * batch_output[0, i]
-#    np.savetxt('/localhome/sxu/Desktop/MA/frustum-pointnets-master/SegmentedPC.out', pc, delimiter=' ')
-#    print("Segmented PointCloud into a txt file written!")
-        
+    
 def frustumRotation(frustum, frustum_centroid, axis): #along z
     if (axis == "z"):
-        frustum_angle = -1 * np.arctan2(frustum_centroid[0, 0], frustum_centroid[0, 1])  +  np.pi/2
-        print ("Frustum angle in Velo: ", frustum_angle)
+        frustum_angle = -1 * np.arctan2(frustum_centroid[0, 0], frustum_centroid[0, 1])  +  np.pi/2 #- 0.1
+        print ("Frustum angle in Velo: ", frustum_angle, "From centroid: ", frustum_centroid[0, :])
     #    frustum_angle = -1 * np.arctan2(np.average(pc_rect[:,2]), np.average(pc_rect[:,0])) 
     #    frustum_angle = 0.8
         # For the rect coord: rotate along z
@@ -336,20 +350,22 @@ def frustumRotation(frustum, frustum_centroid, axis): #along z
         rotmat = np.array([[cosval, sinval],[-sinval, cosval]])
         frustum[:,[0,1]] = np.dot(frustum[:,[0,1]], np.transpose(rotmat))
     elif (axis == "y"):
-        frustum_angle = -1 * np.arctan2(frustum_centroid[0, 2], frustum_centroid[0, 0])  +  np.pi/2
-        print ("Frustum angle in Velo: ", frustum_angle)
+        frustum_angle = -1 * np.arctan2(frustum_centroid[0, 2], frustum_centroid[0, 0])  +  np.pi/2  #+ 0.2
+        print ("Frustum angle in Rect: ", frustum_angle, "From centroid: ", frustum_centroid[0, :])
         cosval = np.cos(frustum_angle)
         sinval = np.sin(frustum_angle)
         rotmat = np.array([[cosval, -sinval],[sinval, cosval]])
         frustum[:,[0,2]] = np.dot(frustum[:,[0,2]], np.transpose(rotmat))
     return frustum
-def get3dBoxVertices(center, size, heading):
+
+def get3dBoxVertices(center, size, rotation, heading):
     '''
     center: (n,3)
     size:   (n,3)
     output: (n, 8,3)
     '''
-    r_matrix = np.array([[np.cos(heading), -np.sin(heading), 0], [np.sin(heading), np.cos(heading), 0], [0 , 0, 1]])
+    r_matrix = np.array([[np.cos(rotation), -np.sin(rotation), 0], [np.sin(rotation), np.cos(rotation), 0], [0 , 0, 1]])
+    h_matrix = np.array([[np.cos(heading), -np.sin(heading), 0], [np.sin(heading), np.cos(heading), 0], [0 , 0, 1]])
     # rotate
 #    size = np.dot(size, r_matrix)
     x_off = size[0]/2
@@ -358,15 +374,28 @@ def get3dBoxVertices(center, size, heading):
     c_x = center[0][0]
     c_y = center[0][1]
     c_z = center[0][2]
+    
     vertices = []
-    vertices.append([c_x-x_off, c_y-y_off, c_z-z_off])
-    vertices.append([c_x+x_off, c_y-y_off, c_z-z_off])
-    vertices.append([c_x+x_off, c_y+y_off, c_z-z_off])
-    vertices.append([c_x-x_off, c_y+y_off, c_z-z_off])
-    vertices.append([c_x-x_off, c_y-y_off, c_z+z_off])
-    vertices.append([c_x+x_off, c_y-y_off, c_z+z_off])
-    vertices.append([c_x+x_off, c_y+y_off, c_z+z_off])
-    vertices.append([c_x-x_off, c_y+y_off, c_z+z_off])
+    vertices.append([-x_off, -y_off, -z_off])
+    vertices.append([x_off, -y_off, -z_off])
+    vertices.append([x_off, y_off, -z_off])
+    vertices.append([-x_off, y_off, -z_off])
+    vertices.append([-x_off, -y_off, z_off])
+    vertices.append([x_off, -y_off, z_off])
+    vertices.append([x_off, y_off, z_off])
+    vertices.append([-x_off, y_off, z_off])
+    vertices = np.dot(vertices, h_matrix)
+    vertices = vertices + [c_x, c_y, c_z]
+    
+#    vertices = []
+#    vertices.append([c_x-x_off, c_y-y_off, c_z-z_off])
+#    vertices.append([c_x+x_off, c_y-y_off, c_z-z_off])
+#    vertices.append([c_x+x_off, c_y+y_off, c_z-z_off])
+#    vertices.append([c_x-x_off, c_y+y_off, c_z-z_off])
+#    vertices.append([c_x-x_off, c_y-y_off, c_z+z_off])
+#    vertices.append([c_x+x_off, c_y-y_off, c_z+z_off])
+#    vertices.append([c_x+x_off, c_y+y_off, c_z+z_off])
+#    vertices.append([c_x-x_off, c_y+y_off, c_z+z_off])
 #    vertices = np.dot(vertices, r_matrix)
     return vertices
 
