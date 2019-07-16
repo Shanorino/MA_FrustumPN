@@ -99,6 +99,8 @@ def inference(sess, ops, pc, one_hot_vec, box2d, batch_size):
     scores = np.zeros((pc.shape[0],)) # 3D box score 
    
     ep = ops['end_points'] 
+    
+
     for i in range(int(num_batches)):
         feed_dict = {\
             ops['pointclouds_pl']: pc[i*batch_size:(i+1)*batch_size,...],
@@ -109,21 +111,21 @@ def inference(sess, ops, pc, one_hot_vec, box2d, batch_size):
         t1 = time.time()
         batch_logits, batch_centers, \
         batch_heading_scores, batch_heading_residuals, \
-        batch_size_scores, batch_size_residuals = \
+        batch_size_scores, batch_size_residuals, stage1 = \
             sess.run([ops['logits'], ops['center'],
                 ep['heading_scores'], ep['heading_residuals'],
-                ep['size_scores'], ep['size_residuals']],
+                ep['size_scores'], ep['size_residuals'], ep['stage1_center']],
                 feed_dict=feed_dict)
             
         print("PointNets inference for 1 batch (frame) in {:.2f}s".format(time.time() - t1))
-        
+#        print ("T-Net Stage1 Center: ", stage1)
         logits[i*batch_size:(i+1)*batch_size,...] = batch_logits
         centers[i*batch_size:(i+1)*batch_size,...] = batch_centers
         heading_logits[i*batch_size:(i+1)*batch_size,...] = batch_heading_scores
         heading_residuals[i*batch_size:(i+1)*batch_size,...] = batch_heading_residuals
         size_logits[i*batch_size:(i+1)*batch_size,...] = batch_size_scores
         size_residuals[i*batch_size:(i+1)*batch_size,...] = batch_size_residuals
-
+    
         # Compute scores
         batch_seg_prob = softmax(batch_logits)[:,:,1] # BxN
         batch_seg_mask = np.argmax(batch_logits, 2) # BxN
@@ -133,6 +135,18 @@ def inference(sess, ops, pc, one_hot_vec, box2d, batch_size):
         size_prob = np.max(softmax(batch_size_scores),1) # B,
         batch_scores = np.log(mask_mean_prob) + np.log(heading_prob) + np.log(size_prob)
         scores[i*batch_size:(i+1)*batch_size] = batch_scores 
+#    if np.array_equal(logits[0,...], logits[1,...]):
+#        print ("LOGITS(Segmentation) IDENTICAL!")
+#    else:
+#        print ("LOGITS(Segmentation) NOT IDENTICAL!")
+#    if np.array_equal(centers[0,...], centers[1,...]):
+#        print ("CENTER (From T-Net) IDENTICAL!")
+#    else:
+#        print ("CENTER (From T-Net) NOT IDENTICAL!")
+#    if np.array_equal(size_residuals[0,...], size_residuals[1,...]):
+#        print ("SIZE (From Box-Net) IDENTICAL!")
+#    else:
+#        print ("SIZE (From Box-Net) NOT IDENTICAL!")
     # Finished computing scores
     heading_cls = np.argmax(heading_logits, 1) # B
     size_cls = np.argmax(size_logits, 1) # B
@@ -165,23 +179,12 @@ def test_segmentation(input_pc, input_centroid, sess, ops):
     '''
     vertices_list = []
 
-    # load PointCloud here
-#    import vtk
-#    reader = vtk.vtkPolyDataReader()
-#    reader.SetFileName("/localhome/sxu/Desktop/MA/frustum-pointnets-master/dataset/xtion/output.vtk")
-#    reader.Update()
-#    polydata = reader.GetOutput()
-#    np_pts = []
-#    for i in range(polydata.GetNumberOfCells()):
-#       pts = polydata.GetCell(i).GetPoints()    
-#       np_pts.append( np.array([pts.GetPoint(i) for i in range(pts.GetNumberOfPoints())]) )
-#    pc = np.asarray(np_pts).squeeze() # numPoints x 3
-    
+    # load PointCloud here    
     if input_pc is None:
-        pc = np.fromfile("/localhome/sxu/Desktop/MA/frustum-pointnets-master/dataset/xtion/rsPC1.bin", dtype=np.float).reshape(-1, 3)
+        pc = np.fromfile("/localhome/sxu/Desktop/MA/frustum-pointnets-master/dataset/xtion/rsPC2.bin", dtype=np.float).reshape(-1, 2048, 3)
     else:
-        pc = input_pc[0, :, :]
-    # Down sample the PointCloud
+        pc = input_pc#[0, :, :]
+    # Cropping-trick
 #    pc = pc[np.where(pc[:,1]<0)]
 #    pc = pc[np.where(pc[:,2]>-1.6)]
 #    pc[:,0] += 10
@@ -189,73 +192,72 @@ def test_segmentation(input_pc, input_centroid, sess, ops):
 #    pc = pc[np.random.randint(pc.shape[0], size=1024), 0:3] #10%: size=int(pc.shape[0]/10)
     # Get 3d centroid from 2d detection
     if input_centroid is None:
-        pc_centroid = np.fromfile("/localhome/sxu/Desktop/MA/frustum-pointnets-master/dataset/xtion/rsCentroid1.bin", dtype=np.float).reshape(-1, 3)
+        pc_centroid = np.fromfile("/localhome/sxu/Desktop/MA/frustum-pointnets-master/dataset/xtion/rsCentroid2.bin", dtype=np.float).reshape(-1, 3)
     else:
         pc_centroid = input_centroid
+        
     # Manual calibration
-    
     utils = module_from_file("utils", "/localhome/sxu/Desktop/MA/frustum-pointnets-master/kitti/kitti_util.py")
-#    viz_util = module_from_file("viz_util", "/localhome/sxu/Desktop/MA/frustum-pointnets-master/mayavi/viz_util.py")
     cali = utils.Calibration('/localhome/sxu/Desktop/MA/frustum-pointnets-master/dataset/KITTI/object/training/calib/000002.txt')
     
     t0 = time.time()
-    pc_rect = cali.project_velo_to_rect(pc[:,0:3])
-    pc_centroid_rect = cali.project_velo_to_rect(pc_centroid[:,0:3])
-    # rotate pc along z
-    pc = frustumRotation(pc, pc_centroid, "z")
-    pc_rect = frustumRotation(pc_rect, pc_centroid_rect, "y")
+    objNum = pc.shape[0] # How many objects are detected by 2D detection
     
-    # calculate heading angle (to rotate) (for the 3d bounding box) (right-handed axis)
-#    frustum_angle = (-1 * np.arctan2(pc_centroid_rect[0, 2], pc_centroid_rect[0, 0])  +  np.pi/2) 
-    frustum_angle = (-1 * np.arctan2(pc_centroid[0, 0], pc_centroid[0, 1])  +  np.pi/2) 
-#    # For the rect coord: rotate along y
-#    cosval = np.cos(frustum_angle)
-#    sinval = np.sin(frustum_angle)
-#    rotmat = np.array([[cosval, -sinval],[sinval, cosval]])
-#    pc_rect[:,[0,2]] = np.dot(pc_rect[:,[0,2]], np.transpose(rotmat))
-    
-    # For the Velodyne coord: rotate the original PC too (along z)
-    
+    # Frustum rotation
+    pc_rect = np.zeros_like(pc)
+    pc_centroid_rect = np.zeros_like(pc_centroid)
+    frustum_angle = []
+    for i in range(objNum):
+        pc_rect[i, :, :] = cali.project_velo_to_rect(pc[i, :, :])
+        pc_centroid_rect[i, :] = cali.project_velo_to_rect(pc_centroid[i, :].reshape(-1,3))
+        # rotate pc along z
+#        pc[i, :, :] = frustumRotation(pc[i, :, :], pc_centroid[i, :].reshape(-1,3), "z")
+        pc_rect[i, :, :] = frustumRotation(pc_rect[i, :, :], pc_centroid_rect[i, :].reshape(-1,3), "y")
+        
+        # calculate heading angle (to rotate) (for the 3d bounding box) (right-handed axis)
+        frustum_angle.append(1 * np.arctan2(pc_centroid[i, 0], pc_centroid[i, 1])  -  np.pi/2) 
     
     #pc[:, 0] = -pc[:, 0]
     #pc[:, 1] = -pc[:, 1]
 #    pc_rect[:, 2] = pc_rect[:, 2] + 10
     
     # to feed the tf model
-    pc_rect = np.expand_dims(pc_rect, 0)
+#    pc_rect = np.expand_dims(pc_rect, 0)
     
-    print("points: ", pc_rect.shape)
-    batch_size = 1 #pc.shape[0] 
+    print("Input points: ", pc_rect.shape)
+#    if np.array_equal(pc_rect[0, :, :], pc_rect[1, :, :]):
+#        print ("IDENTICAL!")
+#    else:
+#        print ("NOT IDENTICAL!")
+    batch_size = 1 #pc.shape[0] # how many pictures
     num_batches = 1 #int((pc.shape[0]+batch_size-1)/batch_size)
     print ("batchsize: ", batch_size, "num_batches: ", num_batches)
     
     # hand-made data
-    batch_data_to_feed = np.zeros((1, pc_rect.shape[1], 3))
-    batch_one_hot_to_feed = np.zeros((batch_size, 3))
-    batch_yolo_to_feed = np.zeros((batch_size,2))
+    batch_data_to_feed = np.zeros((objNum, pc_rect.shape[1], 3))
+    batch_one_hot_to_feed = np.zeros((objNum, 3))
+    batch_yolo_to_feed = np.zeros((objNum,2))
 #    sess, ops = get_session_and_ops(batch_size=batch_size, num_point=pc_rect.shape[1])
-    
-    for batch_idx in range(1):
-        print('batch idx: %d' % (batch_idx))
-        start_idx = batch_idx * batch_size
-        end_idx = min(1, (batch_idx+1) * batch_size)
-        cur_batch_size = end_idx - start_idx
+    print("Pre-processing in {:.2f}s".format(time.time() - t0))
+    t0 = time.time()
+    for batch_idx in range(objNum):
+        print('Item idx: %d' % (batch_idx))
 
-        batch_data = pc_rect  # problems: 1.centroid 2.scale
+        batch_data = pc_rect[batch_idx, :, :]  # problems: 1.centroid 2.scale
         batch_one_hot_vec = np.asarray([0,1,0]) #pedestrian
         batch_yolo = np.asarray([352,376])
         
-        batch_data_to_feed[0,...] = batch_data
-        batch_one_hot_to_feed[0,:] = batch_one_hot_vec
-        batch_yolo_to_feed[0,:] = batch_yolo
+        batch_data_to_feed[batch_idx,...] = batch_data
+        batch_one_hot_to_feed[batch_idx,:] = batch_one_hot_vec
+        batch_yolo_to_feed[batch_idx,:] = batch_yolo
 #        t1 = time.time()
         
-        # Run one batch inference
-        batch_output, batch_center_pred, \
-            batch_hclass_pred, batch_hres_pred, \
-            batch_sclass_pred, batch_sres_pred, batch_scores = \
-                inference(sess, ops, batch_data_to_feed,
-                    batch_one_hot_to_feed, batch_yolo_to_feed, batch_size=batch_size)
+    # Run one batch inference
+    batch_output, batch_center_pred, \
+        batch_hclass_pred, batch_hres_pred, \
+        batch_sclass_pred, batch_sres_pred, batch_scores = \
+            inference(sess, ops, batch_data_to_feed,
+                batch_one_hot_to_feed, batch_yolo_to_feed, batch_size=batch_size)
     print("Inference done;")
     print("Inference + rectifying in {:.2f}s".format(time.time() - t0))
 #    print("Batch segmentation logits: ", batch_output)
@@ -264,32 +266,53 @@ def test_segmentation(input_pc, input_centroid, sess, ops):
         return
     else:
         print("Pedestrain found! Number of points: ", (batch_output==1).sum()) #(pc[0,:,2]<4).sum())
-        print("Batch predicted center (in rect cam): ", batch_center_pred)
+        print("Shape: ", batch_output.shape)
+#        print("Batch predicted center (in rect cam): ", batch_center_pred) #Bx3
         print("Batch predicted center (in kinect): ", cali.project_rect_to_velo(batch_center_pred))
-        print("Batch heading angle(degree): ", batch_sclass_pred*30, "+", batch_hres_pred)
-        boxParams = g_type_mean_size['Pedestrian'] + batch_sres_pred[0]  # could be wrong here?
-        print(boxParams)
+#        print("Batch heading angle(degree): ", batch_sclass_pred*30, "+", batch_hres_pred*57)
+        boxParams = g_type_mean_size['Pedestrian'] + batch_sres_pred  # could be wrong here?
+        print("3D box sizes: ", boxParams)
         idx = np.where(batch_output==1)[1]
         # Generate the values
-        x_vals = pc[ idx, 0]
-        y_vals = pc[ idx, 1]
-        z_vals = pc[ idx, 2]
+        x_vals = pc[0, idx, 0]
+        y_vals = pc[0, idx, 1]
+        z_vals = pc[0, idx, 2]
 
         # Draw 3D box
-        vertices = get3dBoxVertices(cali.project_rect_to_velo(batch_center_pred), boxParams, -frustum_angle, np.pi/6 * batch_hclass_pred[0])
+        
+        vertices = get3dBoxVertices(cali.project_rect_to_velo(batch_center_pred), boxParams, frustum_angle, np.pi/6 * batch_hclass_pred)
+
 #        print ("vertices: ", vertices)
 #        print ("Frustum angle in rect: ", frustum_angle)
 #        vertices = get3dBoxVertices(cali.project_rect_to_velo(batch_center_pred), boxParams, np.pi/6 * batch_hclass_pred[0] + batch_hres_pred[0])
         
-        visualizePNwithBox(x_vals, y_vals, z_vals, pc, vertices, True)
+#        visualizePNwithBox(x_vals, y_vals, z_vals, pc[0, :, :], vertices, True)
+        return vertices
 
-def visualizePNwithBox(masked_x, masked_y, masked_z, pc, vertices, draw=False):
+def visualizePNwithBox(masked_x, masked_y, masked_z, pc, verticess, draw=False):
     fig = pyplot.figure()
     pyplot.ion()
     pyplot.show()
     ax = fig.add_subplot(1, 2, 1, projection='3d')
     bx = fig.add_subplot(1, 2, 2, projection='3d')
     ax.scatter(masked_x, masked_y, masked_z, c = 'r', marker='o')
+    vertices = verticess[0,...]
+    ax.plot([vertices[0][0], vertices[1][0]], [vertices[0][1], vertices[1][1]], [vertices[0][2], vertices[1][2]], c='r')
+    ax.plot([vertices[1][0], vertices[2][0]], [vertices[1][1], vertices[2][1]], [vertices[1][2], vertices[2][2]], c='r')
+    ax.plot([vertices[2][0], vertices[3][0]], [vertices[2][1], vertices[3][1]], [vertices[2][2], vertices[3][2]], c='r')
+    ax.plot([vertices[3][0], vertices[0][0]], [vertices[3][1], vertices[0][1]], [vertices[3][2], vertices[0][2]], c='r')
+    
+    ax.plot([vertices[4][0], vertices[5][0]], [vertices[4][1], vertices[5][1]], [vertices[4][2], vertices[5][2]], c='r')
+    ax.plot([vertices[5][0], vertices[6][0]], [vertices[5][1], vertices[6][1]], [vertices[5][2], vertices[6][2]], c='r')
+    ax.plot([vertices[6][0], vertices[7][0]], [vertices[6][1], vertices[7][1]], [vertices[6][2], vertices[7][2]], c='r')
+    ax.plot([vertices[7][0], vertices[4][0]], [vertices[7][1], vertices[4][1]], [vertices[7][2], vertices[4][2]], c='r')
+    
+    ax.plot([vertices[0][0], vertices[4][0]], [vertices[0][1], vertices[4][1]], [vertices[0][2], vertices[4][2]], c='r')
+    ax.plot([vertices[1][0], vertices[5][0]], [vertices[1][1], vertices[5][1]], [vertices[1][2], vertices[5][2]], c='r')
+    ax.plot([vertices[2][0], vertices[6][0]], [vertices[2][1], vertices[6][1]], [vertices[2][2], vertices[6][2]], c='r')
+    ax.plot([vertices[3][0], vertices[7][0]], [vertices[3][1], vertices[7][1]], [vertices[3][2], vertices[7][2]], c='r')
+    
+    vertices = verticess[1,...]
     ax.plot([vertices[0][0], vertices[1][0]], [vertices[0][1], vertices[1][1]], [vertices[0][2], vertices[1][2]], c='r')
     ax.plot([vertices[1][0], vertices[2][0]], [vertices[1][1], vertices[2][1]], [vertices[1][2], vertices[2][2]], c='r')
     ax.plot([vertices[2][0], vertices[3][0]], [vertices[2][1], vertices[3][1]], [vertices[2][2], vertices[3][2]], c='r')
@@ -335,15 +358,13 @@ def visualizePNwithBox(masked_x, masked_y, masked_z, pc, vertices, draw=False):
     if (draw):
         pyplot.draw()
         pyplot.pause(1)
-#        input ("press ENTER to continue")
+        input ("press ENTER to continue")
         pyplot.close()
     
 def frustumRotation(frustum, frustum_centroid, axis): #along z
     if (axis == "z"):
         frustum_angle = -1 * np.arctan2(frustum_centroid[0, 0], frustum_centroid[0, 1])  +  np.pi/2 #- 0.1
-        print ("Frustum angle in Velo: ", frustum_angle, "From centroid: ", frustum_centroid[0, :])
-    #    frustum_angle = -1 * np.arctan2(np.average(pc_rect[:,2]), np.average(pc_rect[:,0])) 
-    #    frustum_angle = 0.8
+#        print ("Frustum angle in Velo: ", frustum_angle, "From centroid: ", frustum_centroid[0, :])
         # For the rect coord: rotate along z
         cosval = np.cos(frustum_angle)
         sinval = np.sin(frustum_angle)
@@ -351,7 +372,7 @@ def frustumRotation(frustum, frustum_centroid, axis): #along z
         frustum[:,[0,1]] = np.dot(frustum[:,[0,1]], np.transpose(rotmat))
     elif (axis == "y"):
         frustum_angle = -1 * np.arctan2(frustum_centroid[0, 2], frustum_centroid[0, 0])  +  np.pi/2  #+ 0.2
-        print ("Frustum angle in Rect: ", frustum_angle, "From centroid: ", frustum_centroid[0, :])
+#        print ("Frustum angle in Rect: ", frustum_angle, "From centroid: ", frustum_centroid[0, :])
         cosval = np.cos(frustum_angle)
         sinval = np.sin(frustum_angle)
         rotmat = np.array([[cosval, -sinval],[sinval, cosval]])
@@ -360,43 +381,39 @@ def frustumRotation(frustum, frustum_centroid, axis): #along z
 
 def get3dBoxVertices(center, size, rotation, heading):
     '''
-    center: (n,3)
-    size:   (n,3)
-    output: (n, 8,3)
+    center: (B,n,3)
+    size:   (B,n,3)
+    output: (B,8,3)
     '''
-    r_matrix = np.array([[np.cos(rotation), -np.sin(rotation), 0], [np.sin(rotation), np.cos(rotation), 0], [0 , 0, 1]])
-    h_matrix = np.array([[np.cos(heading), -np.sin(heading), 0], [np.sin(heading), np.cos(heading), 0], [0 , 0, 1]])
-    # rotate
-#    size = np.dot(size, r_matrix)
-    x_off = size[0]/2
-    y_off = size[1]/2
-    z_off = size[2]/2
-    c_x = center[0][0]
-    c_y = center[0][1]
-    c_z = center[0][2]
+    objNum = center.shape[0]
+    vertices = np.zeros((objNum, 8, 3))
     
-    vertices = []
-    vertices.append([-x_off, -y_off, -z_off])
-    vertices.append([x_off, -y_off, -z_off])
-    vertices.append([x_off, y_off, -z_off])
-    vertices.append([-x_off, y_off, -z_off])
-    vertices.append([-x_off, -y_off, z_off])
-    vertices.append([x_off, -y_off, z_off])
-    vertices.append([x_off, y_off, z_off])
-    vertices.append([-x_off, y_off, z_off])
-    vertices = np.dot(vertices, h_matrix)
-    vertices = vertices + [c_x, c_y, c_z]
     
-#    vertices = []
-#    vertices.append([c_x-x_off, c_y-y_off, c_z-z_off])
-#    vertices.append([c_x+x_off, c_y-y_off, c_z-z_off])
-#    vertices.append([c_x+x_off, c_y+y_off, c_z-z_off])
-#    vertices.append([c_x-x_off, c_y+y_off, c_z-z_off])
-#    vertices.append([c_x-x_off, c_y-y_off, c_z+z_off])
-#    vertices.append([c_x+x_off, c_y-y_off, c_z+z_off])
-#    vertices.append([c_x+x_off, c_y+y_off, c_z+z_off])
-#    vertices.append([c_x-x_off, c_y+y_off, c_z+z_off])
-#    vertices = np.dot(vertices, r_matrix)
+    for i in range(objNum):
+        r_matrix = np.array([[np.cos(rotation[i]), -np.sin(rotation[i]), 0], [np.sin(rotation[i]), np.cos(rotation[i]), 0], [0 , 0, 1]])
+        h_matrix = np.array([[np.cos(heading[i]), -np.sin(heading[i]), 0], [np.sin(heading[i]), np.cos(heading[i]), 0], [0 , 0, 1]])
+        vertice = []
+        
+        x_off = size[i][0]/2
+        y_off = size[i][1]/2
+        z_off = size[i][2]/2
+        c_x = center[i][0]
+        c_y = center[i][1]
+        c_z = center[i][2]
+        
+        vertice.append([-x_off, -y_off, -z_off])
+        vertice.append([x_off, -y_off, -z_off])
+        vertice.append([x_off, y_off, -z_off])
+        vertice.append([-x_off, y_off, -z_off])
+        vertice.append([-x_off, -y_off, z_off])
+        vertice.append([x_off, -y_off, z_off])
+        vertice.append([x_off, y_off, z_off])
+        vertice.append([-x_off, y_off, z_off])
+        vertice = np.dot(vertice, h_matrix)
+        vertice = vertice + [c_x, c_y, c_z]
+        vertice = np.dot(vertice, r_matrix)
+        
+        vertices[i, :, :] = vertice
     return vertices
 
     
