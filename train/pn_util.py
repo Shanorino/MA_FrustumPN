@@ -1,7 +1,7 @@
 '''
 Utility class for 3D detection (Segmentation + T-net + Amodal)
 
-Author: Shane Xu
+Author: Shu Xu
 Date: June 2019
 '''
 
@@ -25,6 +25,8 @@ sys.path.append(BASE_DIR)
 sys.path.append(os.path.join(ROOT_DIR, 'models'))
 from matplotlib import pyplot
 from model_util import NUM_HEADING_BIN, NUM_SIZE_CLUSTER, g_type_mean_size
+import mayavi.mlab as mlab
+from scipy.spatial import ConvexHull
 
 # Set training configurations
 BATCH_SIZE = 32
@@ -181,7 +183,7 @@ def test_segmentation(input_pc, input_centroid, sess, ops):
 
     # load PointCloud here    
     if input_pc is None:
-        pc = np.fromfile("/localhome/sxu/Desktop/MA/frustum-pointnets-master/dataset/xtion/rsPC2.bin", dtype=np.float).reshape(-1, 2048, 3)
+        pc = np.fromfile("/localhome/sxu/Desktop/MA/frustum-pointnets-master/dataset/xtion/rsPC3.bin", dtype=np.float).reshape(-1, 2048, 3)
     else:
         pc = input_pc#[0, :, :]
     # Cropping-trick
@@ -192,7 +194,7 @@ def test_segmentation(input_pc, input_centroid, sess, ops):
 #    pc = pc[np.random.randint(pc.shape[0], size=1024), 0:3] #10%: size=int(pc.shape[0]/10)
     # Get 3d centroid from 2d detection
     if input_centroid is None:
-        pc_centroid = np.fromfile("/localhome/sxu/Desktop/MA/frustum-pointnets-master/dataset/xtion/rsCentroid2.bin", dtype=np.float).reshape(-1, 3)
+        pc_centroid = np.fromfile("/localhome/sxu/Desktop/MA/frustum-pointnets-master/dataset/xtion/rsCentroid3.bin", dtype=np.float).reshape(-1, 3)
     else:
         pc_centroid = input_centroid
         
@@ -265,18 +267,19 @@ def test_segmentation(input_pc, input_centroid, sess, ops):
         print("Segmentation failed: no pedestrain found!")
         return
     else:
-        print("Pedestrain found! Number of points: ", (batch_output==1).sum()) #(pc[0,:,2]<4).sum())
+#        print("Pedestrain found! Number of points: ", (batch_output==1).sum()) #(pc[0,:,2]<4).sum())
         print("Shape: ", batch_output.shape)
 #        print("Batch predicted center (in rect cam): ", batch_center_pred) #Bx3
-        print("Batch predicted center (in kinect): ", cali.project_rect_to_velo(batch_center_pred))
+        print("Batch predicted center (in Velo): ", cali.project_rect_to_velo(batch_center_pred))
 #        print("Batch heading angle(degree): ", batch_sclass_pred*30, "+", batch_hres_pred*57)
         boxParams = g_type_mean_size['Pedestrian'] + batch_sres_pred  # could be wrong here?
         print("3D box sizes: ", boxParams)
-        idx = np.where(batch_output==1)[1]
-        # Generate the values
-        x_vals = pc[0, idx, 0]
-        y_vals = pc[0, idx, 1]
-        z_vals = pc[0, idx, 2]
+    
+        # Mask the points from Seg-PN
+#        idx = np.where(batch_output==1)[1]
+#        x_vals = pc[0, idx, 0]
+#        y_vals = pc[0, idx, 1]
+#        z_vals = pc[0, idx, 2]
 
         # Draw 3D box
         
@@ -287,6 +290,13 @@ def test_segmentation(input_pc, input_centroid, sess, ops):
 #        vertices = get3dBoxVertices(cali.project_rect_to_velo(batch_center_pred), boxParams, np.pi/6 * batch_hclass_pred[0] + batch_hres_pred[0])
         
 #        visualizePNwithBox(x_vals, y_vals, z_vals, pc[0, :, :], vertices, True)
+        
+        if (False):
+            fig = mlab.figure(figure=None, bgcolor=(0,0,0),fgcolor=None, engine=None, size=(800, 500))
+#        verts = np.fromfile("/localhome/sxu/Desktop/MA/frustum-pointnets-master/dataset/xtion/rsVerts3.bin", dtype=np.float).reshape(-1, 3)
+            draw_lidar_with_boxes(pc[1,...], vertices, fig)
+#        draw_boxes3d(vertices, fig)
+            input("ENTER TO QUIT TESTING")
         return vertices
 
 def visualizePNwithBox(masked_x, masked_y, masked_z, pc, verticess, draw=False):
@@ -312,21 +322,21 @@ def visualizePNwithBox(masked_x, masked_y, masked_z, pc, verticess, draw=False):
     ax.plot([vertices[2][0], vertices[6][0]], [vertices[2][1], vertices[6][1]], [vertices[2][2], vertices[6][2]], c='r')
     ax.plot([vertices[3][0], vertices[7][0]], [vertices[3][1], vertices[7][1]], [vertices[3][2], vertices[7][2]], c='r')
     
-    vertices = verticess[1,...]
-    ax.plot([vertices[0][0], vertices[1][0]], [vertices[0][1], vertices[1][1]], [vertices[0][2], vertices[1][2]], c='r')
-    ax.plot([vertices[1][0], vertices[2][0]], [vertices[1][1], vertices[2][1]], [vertices[1][2], vertices[2][2]], c='r')
-    ax.plot([vertices[2][0], vertices[3][0]], [vertices[2][1], vertices[3][1]], [vertices[2][2], vertices[3][2]], c='r')
-    ax.plot([vertices[3][0], vertices[0][0]], [vertices[3][1], vertices[0][1]], [vertices[3][2], vertices[0][2]], c='r')
-    
-    ax.plot([vertices[4][0], vertices[5][0]], [vertices[4][1], vertices[5][1]], [vertices[4][2], vertices[5][2]], c='r')
-    ax.plot([vertices[5][0], vertices[6][0]], [vertices[5][1], vertices[6][1]], [vertices[5][2], vertices[6][2]], c='r')
-    ax.plot([vertices[6][0], vertices[7][0]], [vertices[6][1], vertices[7][1]], [vertices[6][2], vertices[7][2]], c='r')
-    ax.plot([vertices[7][0], vertices[4][0]], [vertices[7][1], vertices[4][1]], [vertices[7][2], vertices[4][2]], c='r')
-    
-    ax.plot([vertices[0][0], vertices[4][0]], [vertices[0][1], vertices[4][1]], [vertices[0][2], vertices[4][2]], c='r')
-    ax.plot([vertices[1][0], vertices[5][0]], [vertices[1][1], vertices[5][1]], [vertices[1][2], vertices[5][2]], c='r')
-    ax.plot([vertices[2][0], vertices[6][0]], [vertices[2][1], vertices[6][1]], [vertices[2][2], vertices[6][2]], c='r')
-    ax.plot([vertices[3][0], vertices[7][0]], [vertices[3][1], vertices[7][1]], [vertices[3][2], vertices[7][2]], c='r')
+#    vertices = verticess[1,...]
+#    ax.plot([vertices[0][0], vertices[1][0]], [vertices[0][1], vertices[1][1]], [vertices[0][2], vertices[1][2]], c='r')
+#    ax.plot([vertices[1][0], vertices[2][0]], [vertices[1][1], vertices[2][1]], [vertices[1][2], vertices[2][2]], c='r')
+#    ax.plot([vertices[2][0], vertices[3][0]], [vertices[2][1], vertices[3][1]], [vertices[2][2], vertices[3][2]], c='r')
+#    ax.plot([vertices[3][0], vertices[0][0]], [vertices[3][1], vertices[0][1]], [vertices[3][2], vertices[0][2]], c='r')
+#    
+#    ax.plot([vertices[4][0], vertices[5][0]], [vertices[4][1], vertices[5][1]], [vertices[4][2], vertices[5][2]], c='r')
+#    ax.plot([vertices[5][0], vertices[6][0]], [vertices[5][1], vertices[6][1]], [vertices[5][2], vertices[6][2]], c='r')
+#    ax.plot([vertices[6][0], vertices[7][0]], [vertices[6][1], vertices[7][1]], [vertices[6][2], vertices[7][2]], c='r')
+#    ax.plot([vertices[7][0], vertices[4][0]], [vertices[7][1], vertices[4][1]], [vertices[7][2], vertices[4][2]], c='r')
+#    
+#    ax.plot([vertices[0][0], vertices[4][0]], [vertices[0][1], vertices[4][1]], [vertices[0][2], vertices[4][2]], c='r')
+#    ax.plot([vertices[1][0], vertices[5][0]], [vertices[1][1], vertices[5][1]], [vertices[1][2], vertices[5][2]], c='r')
+#    ax.plot([vertices[2][0], vertices[6][0]], [vertices[2][1], vertices[6][1]], [vertices[2][2], vertices[6][2]], c='r')
+#    ax.plot([vertices[3][0], vertices[7][0]], [vertices[3][1], vertices[7][1]], [vertices[3][2], vertices[7][2]], c='r')
     
     ax.set_xlabel('X-axis')
     ax.set_ylabel('Y-axis')
@@ -383,11 +393,12 @@ def get3dBoxVertices(center, size, rotation, heading):
     '''
     center: (B,n,3)
     size:   (B,n,3)
+    rotation: angle along Z (B,3)
+    heading: angle along its own center (B,3)
     output: (B,8,3)
     '''
     objNum = center.shape[0]
     vertices = np.zeros((objNum, 8, 3))
-    
     
     for i in range(objNum):
         r_matrix = np.array([[np.cos(rotation[i]), -np.sin(rotation[i]), 0], [np.sin(rotation[i]), np.cos(rotation[i]), 0], [0 , 0, 1]])
@@ -416,4 +427,69 @@ def get3dBoxVertices(center, size, rotation, heading):
         vertices[i, :, :] = vertice
     return vertices
 
-    
+def draw_lidar_with_boxes(pc, vertices, fig=None, color=None):
+    ''' Draw lidar points. simplest set up. '''
+    if fig is None:
+        fig = mlab.figure(figure=None, bgcolor=(0,0,0), fgcolor=None, engine=None, size=(800, 500))
+    if color is None: 
+        color = crop_from_3dbox(pc, vertices)
+#        color = pc[:,0]
+    #draw points
+    mlab.points3d(pc[:,0], pc[:,1], pc[:,2], color, color=None, mode='point', colormap = 'gnuplot', scale_factor=1, figure=fig)
+    #draw origin
+    mlab.points3d(0, 0, 0, color=(1,1,1), mode='sphere', scale_factor=0.2)
+    #draw axis
+    axes=np.array([
+        [2.,0.,0.,0.],
+        [0.,2.,0.,0.],
+        [0.,0.,2.,0.],
+    ],dtype=np.float64)
+    mlab.plot3d([0, axes[0,0]], [0, axes[0,1]], [0, axes[0,2]], color=(1,0,0), tube_radius=None, figure=fig)
+    mlab.plot3d([0, axes[1,0]], [0, axes[1,1]], [0, axes[1,2]], color=(0,1,0), tube_radius=None, figure=fig)
+    mlab.plot3d([0, axes[2,0]], [0, axes[2,1]], [0, axes[2,2]], color=(0,0,1), tube_radius=None, figure=fig)
+    mlab.view(azimuth=180, elevation=70, focalpoint=[ 12.0909996 , -1.04700089, -2.03249991], distance=62.0, figure=fig)
+    draw_boxes3d(vertices, fig)
+    return fig
+
+def draw_boxes3d(gt_boxes3d, fig, color=(1,1,1), line_width=1, draw_text=True, text_scale=(1,1,1), color_list=None):
+    ''' Draw 3D bounding boxes
+    Args:
+        gt_boxes3d: numpy array (n,8,3) for XYZs of the box corners
+        fig: mayavi figure handler
+        color: RGB value tuple in range (0,1), box line color
+        line_width: box line width
+        draw_text: boolean, if true, write box indices beside boxes
+        text_scale: three number tuple
+        color_list: a list of RGB tuple, if not None, overwrite color.
+    Returns:
+        fig: updated fig
+    ''' 
+    num = len(gt_boxes3d)
+    for n in range(num):
+        b = gt_boxes3d[n]
+        if color_list is not None:
+            color = color_list[n] 
+        if draw_text: mlab.text3d(b[4,0], b[4,1], b[4,2], '%d'%n, scale=text_scale, color=color, figure=fig)
+        for k in range(0,4):
+            #http://docs.enthought.com/mayavi/mayavi/auto/mlab_helper_functions.html
+            i,j=k,(k+1)%4
+            mlab.plot3d([b[i,0], b[j,0]], [b[i,1], b[j,1]], [b[i,2], b[j,2]], color=color, tube_radius=None, line_width=line_width, figure=fig)
+
+            i,j=k+4,(k+1)%4 + 4
+            mlab.plot3d([b[i,0], b[j,0]], [b[i,1], b[j,1]], [b[i,2], b[j,2]], color=color, tube_radius=None, line_width=line_width, figure=fig)
+
+            i,j=k,k+4
+            mlab.plot3d([b[i,0], b[j,0]], [b[i,1], b[j,1]], [b[i,2], b[j,2]], color=color, tube_radius=None, line_width=line_width, figure=fig)
+    return fig
+
+def crop_from_3dbox(pc, vertices):
+    color = np.copy(pc[:, 0])
+    pointNum = len(pc) #2048
+    for box in vertices:
+        hull = ConvexHull(box)
+        for i in range(pointNum):
+            new_pts = np.vstack((box, pc[i]))
+            new_hull = ConvexHull(new_pts)
+            if np.array_equal(new_hull.vertices, hull.vertices):
+                color[i] = 9
+    return color
