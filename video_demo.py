@@ -29,6 +29,7 @@ num_classes     = 80
 input_size      = 416
 graph           = tf.Graph()
 return_tensors  = utils.read_pb_return_tensors(graph, pb_file, return_elements)
+TOTAL_FRAMES = 50
 
 def draw_lidar_with_boxes(pc, vertices, fig=None, color=None):
     ''' Draw lidar points. simplest set up. '''
@@ -50,8 +51,10 @@ def draw_lidar_with_boxes(pc, vertices, fig=None, color=None):
     mlab.plot3d([0, axes[0,0]], [0, axes[0,1]], [0, axes[0,2]], color=(1,0,0), tube_radius=None, figure=fig)
     mlab.plot3d([0, axes[1,0]], [0, axes[1,1]], [0, axes[1,2]], color=(0,1,0), tube_radius=None, figure=fig)
     mlab.plot3d([0, axes[2,0]], [0, axes[2,1]], [0, axes[2,2]], color=(0,0,1), tube_radius=None, figure=fig)
-    mlab.view(azimuth=180, elevation=70, focalpoint=[ 12.0909996 , -1.04700089, -2.03249991], distance=62.0, figure=fig)
+    
     draw_boxes3d(vertices, fig)
+    
+    mlab.view(azimuth=180, elevation=80, focalpoint=[ 12.0909996 , -1.04700089, -2.03249991], distance=19.0, figure=fig)
     return fig
 
 def draw_boxes3d(gt_boxes3d, fig, color=(1,1,1), line_width=1, draw_text=True, text_scale=(1,1,1), color_list=None):
@@ -94,7 +97,7 @@ def crop_from_3dbox(pc, vertices):
             new_pts = np.vstack((box, pc[i]))
             new_hull = ConvexHull(new_pts)
             if np.array_equal(new_hull.vertices, hull.vertices):
-                color[i] = 5
+                color[i] = 10
     return color
 
 # Realsense system into Velodyne
@@ -120,7 +123,7 @@ def collectPoints(pc, numPoints):
 
 
 
-
+####################################### Start capturing ###################################
 pipeline = rs.pipeline()
     
 #Create a config and configure the pipeline to stream
@@ -189,14 +192,20 @@ with tf.Session(graph=graph) as sess:
         bboxes = utils.nms(bboxes, 0.45, method='nms')
         # only draw "person"
         SAMPLE_NUM = 2048
-        VISUALIZE_ROI = False
+        VISUALIZE_BOX = False
         SAVE_POINTCLOUD = False
+        SAVE_VIDEO = True
         human_box = []
         interestedObjects = 0
         for i, bbox in enumerate(bboxes):
             if (bbox[5] == 0 and bbox[4] >= 0.5):
                 interestedObjects += 1
-        print ("YOLO: Found", interestedObjects, "people")
+        if (interestedObjects == 0):
+            print ("YOLO: I did not see anyone!")
+            continue
+        else:
+            print ("YOLO: Found", interestedObjects, "people")
+        
         rois = np.zeros((interestedObjects, SAMPLE_NUM, 3)) # BxNx3
         centroids = np.zeros((interestedObjects, 3))  # Bx3
         for i, bbox in enumerate(bboxes):
@@ -214,14 +223,7 @@ with tf.Session(graph=graph) as sess:
                 centroid = verts[center[1], center[0], :].reshape(-1, 3)
                 centroid = rsToVelo(centroid) # 1x3
                 centroids[interestedObjects, :] = centroid
-        # Test the cropped rois
-        if (VISUALIZE_ROI):
-            fig = mlab.figure(figure=None, bgcolor=(0,0,0),fgcolor=None, engine=None, size=(800, 500))
-            if rois.shape[0] == 1:    
-                draw_lidar_simple(rois[0,...], fig)
-            elif rois.shape[0] == 2:
-                draw_lidar_simple(rois[0,...], fig)
-                draw_lidar_simple(rois[1,...], fig)
+
         # Draw 2D boxes for the 2D image(from YOLO)
         image = utils.draw_bbox(frame, human_box)
         # 2D Visualize
@@ -236,22 +238,27 @@ with tf.Session(graph=graph) as sess:
             if cv2.waitKey(1) & 0xFF == ord('q'): break
         
         # 3D Segmentation
-        box_vertices = test_segmentation(rois, centroids, sess_3d, ops_3d)
+        if (rois.shape[0] > 0):
+            box_vertices = test_segmentation(rois, centroids, sess_3d, ops_3d)
         if (box_vertices is not None):
-            time.sleep(1)
-            fig = mlab.figure(figure=None, bgcolor=(0,0,0),fgcolor=None, engine=None, size=(800, 500))
+#            time.sleep(1)
+            TOTAL_FRAMES -= 1
             org_pc = rsToVelo(collectPoints(verts.reshape(-1,3), 5000))
-            draw_lidar_with_boxes(org_pc, box_vertices, fig)
-#            draw_lidar_simple(rois[0,...], fig)
-#            draw_lidar_simple(rsToVelo(collectPoints(verts.reshape(-1,3), fig)
-#            draw_lidar_simple(rois[0,...], fig)
-#            draw_lidar_simple(rois[1,...], fig)
-#            draw_boxes3d(box_vertices, fig)
-            input ("ENTER")
-            mlab.close()
+            if (TOTAL_FRAMES < 0):
+                # reset the frames (overwrite the old ones)
+                TOTAL_FRAMES = 50
+                input ("ENTER")
+            if (VISUALIZE_BOX):
+                fig = mlab.figure(figure=None, bgcolor=(0,0,0),fgcolor=None, engine=None, size=(800, 500))
+                draw_lidar_with_boxes(org_pc, box_vertices, fig)
+#            mlab.close()
             if (SAVE_POINTCLOUD):
                 org_pc.tofile("rsVerts3.bin")
                 rois.tofile("rsPC3.bin")
                 centroids.tofile("rsCentroid3.bin")
+            if (SAVE_VIDEO):
+                org_pc.tofile("Video_Verts_"+ str(50-TOTAL_FRAMES) +".bin")
+                box_vertices.tofile("Video_Boxes_"+ str(50-TOTAL_FRAMES) +".bin")
+                
 
 
