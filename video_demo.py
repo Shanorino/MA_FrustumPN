@@ -109,15 +109,24 @@ def rsToVelo(pc):
     tl_matrix = np.array([0, 0, -1.1])
     return (np.dot(pc, t_matrix) + tl_matrix)
 
-# Randomly collect (1024) points
-def collectPoints(pc, numPoints):
+# Randomly collect (N) points; z_range (front & rear) is for the outdoor
+def collectPoints(pc, numPoints, z_range=None):
     # clear empty points first
     pointCloud = pc[~np.all(pc == 0, axis=1)]
     # filter out the ridiculous points (e.g. height=20m)
     pointCloud = pointCloud[np.where(pointCloud[:,1]<3)]
+    if (z_range is not None):
+        pointCloud = pointCloud[np.where(pointCloud[:,2]<z_range)]
     return pointCloud[np.random.randint(pointCloud.shape[0], size=numPoints), 0:3]
 
-
+# Check if the PointCloud is valid while testing in outdoor
+def validROI(roi, z_range):
+    # Filter out the points which are too far (farther than z_range)
+    roi = roi[np.where(roi[:,2]<z_range)]
+    if (len(roi)) > 2048:
+        return True
+    print ("Points are too sparse, PLEASE MOVE CLOSER!")
+    return False
 
 
 
@@ -192,9 +201,10 @@ with tf.Session(graph=graph) as sess:
         bboxes = utils.nms(bboxes, 0.45, method='nms')
         # only draw "person"
         SAMPLE_NUM = 2048
+        VISUALIZE_YOLO = False
         VISUALIZE_BOX = False
         SAVE_POINTCLOUD = False
-        SAVE_VIDEO = True
+        SAVE_VIDEO = False
         human_box = []
         interestedObjects = 0
         for i, bbox in enumerate(bboxes):
@@ -218,6 +228,11 @@ with tf.Session(graph=graph) as sess:
                 y_max = int(bbox[3])
                 center = [int((x_min+x_max)/2), int((y_min+y_max)/2)]
                 roi = verts[y_min:y_max, x_min:x_max, :].reshape(-1, 3)
+                # Only save the ROI if there are enough valid points
+                if not (validROI(roi, 6)):
+                    rois = np.delete(rois, interestedObjects, axis=0)
+                    centroids = np.delete(centroids, interestedObjects, axis=0)
+                    continue
                 roi = rsToVelo(collectPoints(roi, SAMPLE_NUM)) # 2048x3
                 rois[interestedObjects, :, :] = roi
                 centroid = verts[center[1], center[0], :].reshape(-1, 3)
@@ -227,7 +242,7 @@ with tf.Session(graph=graph) as sess:
         # Draw 2D boxes for the 2D image(from YOLO)
         image = utils.draw_bbox(frame, human_box)
         # 2D Visualize
-        if (True):
+        if (VISUALIZE_YOLO):
             curr_time = time.time()
             exec_time = curr_time - prev_time
             result = np.asarray(image)
@@ -242,8 +257,7 @@ with tf.Session(graph=graph) as sess:
             box_vertices = test_segmentation(rois, centroids, sess_3d, ops_3d)
         if (box_vertices is not None):
 #            time.sleep(1)
-            TOTAL_FRAMES -= 1
-            org_pc = rsToVelo(collectPoints(verts.reshape(-1,3), 5000))
+            org_pc = rsToVelo(collectPoints(verts.reshape(-1,3), 5000, 15))
             if (TOTAL_FRAMES < 0):
                 # reset the frames (overwrite the old ones)
                 TOTAL_FRAMES = 50
@@ -259,6 +273,6 @@ with tf.Session(graph=graph) as sess:
             if (SAVE_VIDEO):
                 org_pc.tofile("Video_Verts_"+ str(50-TOTAL_FRAMES) +".bin")
                 box_vertices.tofile("Video_Boxes_"+ str(50-TOTAL_FRAMES) +".bin")
-                
+            TOTAL_FRAMES -= 1    
 
 
