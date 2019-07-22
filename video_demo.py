@@ -6,6 +6,11 @@ Demo class for YOLO + Frumstum PointNet detection
 Author: Shu Xu
 Date: July 2019
 '''
+import sys
+# OpenCV conflict with ROS
+sys.path.remove('/opt/ros/kinetic/lib/python2.7/dist-packages')
+sys.path.append('/localhome/sxu/Desktop/MA/frustum-pointnets-master/train')
+
 import cv2
 import time
 import numpy as np
@@ -14,9 +19,6 @@ import tensorflow as tf
 from PIL import Image
 import pyrealsense2 as rs
 
-
-import sys
-sys.path.append('/localhome/sxu/Desktop/MA/frustum-pointnets-master/train')
 from pn_util import *
 import mayavi.mlab as mlab
 from scipy.spatial import ConvexHull
@@ -31,6 +33,29 @@ graph           = tf.Graph()
 return_tensors  = utils.read_pb_return_tensors(graph, pb_file, return_elements)
 TOTAL_FRAMES = 50
 
+VISUALIZE_YOLO = False
+VISUALIZE_BOX = False
+SAVE_POINTCLOUD = False
+SAVE_VIDEO = False
+
+DEMO_MODE = input("SELECT MODE: \n" + 
+                 "0) PURE DEBUG: Save nothing\n" +
+                 "1) ROBOT DEBUG: Save the 3D bounding boxes and PointClouds\n" +
+                 "2) ROBOT DEBUG: Save the ROIs and PCs for offline segmentation & 3D prediction\n" +
+                 "3) COMPUTER DEBUG: Only visualize 2D boxes and 3D boxes without saving\n" +
+                 "4) COMPUTER DEBUG: Visualize and save everything\n")
+if (DEMO_MODE == "1"):
+    SAVE_VIDEO = True
+elif (DEMO_MODE == "2"):
+    SAVE_POINTCLOUD = True
+elif (DEMO_MODE == "3"):
+    VISUALIZE_YOLO = True
+    VISUALIZE_BOX = True
+elif (DEMO_MODE == "4"):
+    VISUALIZE_YOLO = True
+    VISUALIZE_BOX = True
+    SAVE_POINTCLOUD = True
+    
 def draw_lidar_with_boxes(pc, vertices, fig=None, color=None):
     ''' Draw lidar points. simplest set up. '''
     if fig is None:
@@ -201,10 +226,7 @@ with tf.Session(graph=graph) as sess:
         bboxes = utils.nms(bboxes, 0.45, method='nms')
         # only draw "person"
         SAMPLE_NUM = 2048
-        VISUALIZE_YOLO = False
-        VISUALIZE_BOX = False
-        SAVE_POINTCLOUD = False
-        SAVE_VIDEO = False
+        
         human_box = []
         interestedObjects = 0
         for i, bbox in enumerate(bboxes):
@@ -255,6 +277,8 @@ with tf.Session(graph=graph) as sess:
         # 3D Segmentation
         if (rois.shape[0] > 0):
             box_vertices = test_segmentation(rois, centroids, sess_3d, ops_3d)
+        else:
+            box_vertices = None
         if (box_vertices is not None):
 #            time.sleep(1)
             org_pc = rsToVelo(collectPoints(verts.reshape(-1,3), 5000, 15))
