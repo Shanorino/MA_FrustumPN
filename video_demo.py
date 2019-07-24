@@ -8,8 +8,8 @@ Date: July 2019
 '''
 import sys
 # OpenCV conflict with ROS
-sys.path.remove('/opt/ros/kinetic/lib/python2.7/dist-packages')
-sys.path.append('/localhome/sxu/Desktop/MA/frustum-pointnets-master/train')
+#sys.path.remove('/opt/ros/kinetic/lib/python2.7/dist-packages')
+sys.path.append('../MA/frustum-pointnets-master/train')
 
 import cv2
 import time
@@ -240,8 +240,9 @@ with tf.Session(graph=graph) as sess:
         
         rois = np.zeros((interestedObjects, SAMPLE_NUM, 3)) # BxNx3
         centroids = np.zeros((interestedObjects, 3))  # Bx3
+        objectTypes = np.zeros((interestedObjects, 1))  # Bx1
         for i, bbox in enumerate(bboxes):
-            if (bbox[5] == 0 and bbox[4] >= 0.5):
+            if (bbox[5] == 0 and bbox[4] >= 0.5): # 0: person, 2: car , 1: bicycle (NOT cyclist!)
                 interestedObjects -= 1
                 human_box.append(bboxes[i])
                 x_min = int(bbox[0])
@@ -254,12 +255,13 @@ with tf.Session(graph=graph) as sess:
                 if not (validROI(roi, 6)):
                     rois = np.delete(rois, interestedObjects, axis=0)
                     centroids = np.delete(centroids, interestedObjects, axis=0)
+                    objectTypes = np.delete(objectTypes, interestedObjects, axis=0)
                     continue
                 roi = rsToVelo(collectPoints(roi, SAMPLE_NUM)) # 2048x3
                 rois[interestedObjects, :, :] = roi
-                centroid = verts[center[1], center[0], :].reshape(-1, 3)
-                centroid = rsToVelo(centroid) # 1x3
+                centroid = rsToVelo(verts[center[1], center[0], :].reshape(-1, 3)) # 1x3
                 centroids[interestedObjects, :] = centroid
+                objectTypes [interestedObjects, :] = bbox[5]
 
         # Draw 2D boxes for the 2D image(from YOLO)
         image = utils.draw_bbox(frame, human_box)
