@@ -14,7 +14,7 @@ import importlib
 import numpy as np
 import tensorflow as tf
 #import cPickle as pickle
-import pickle
+#import pickle
 import time
 from mpl_toolkits.mplot3d import Axes3D
 import importlib.util
@@ -36,6 +36,7 @@ NUM_POINT = 1024
 MODEL = importlib.import_module('frustum_pointnets_v1_tiny1')
 NUM_CLASSES = 2
 NUM_CHANNEL = 3
+ONE_HOT_TEMPLATE = {'Pedestrian': [0, 1, 0], 'Cyclist': [0, 0, 1], 'Car': [1, 0, 0]} # do not change the order
 
 def get_session_and_ops(batch_size, num_point):
     ''' Define model graph, load model parameters,
@@ -56,6 +57,7 @@ def get_session_and_ops(batch_size, num_point):
             saver = tf.train.Saver()
 
         # Create a session
+#        print ("TEST if running on GPU")
         config = tf.ConfigProto()
         config.gpu_options.allow_growth = True
         config.allow_soft_placement = True
@@ -233,7 +235,7 @@ def test_segmentation(input_pc, input_centroid, sess, ops):
 #        print ("NOT IDENTICAL!")
     batch_size = 1 #pc.shape[0] # how many pictures
     num_batches = 1 #int((pc.shape[0]+batch_size-1)/batch_size)
-    print ("batchsize: ", batch_size, "num_batches: ", num_batches)
+#    print ("batchsize: ", batch_size, "num_batches: ", num_batches)
     
     # hand-made data
     batch_data_to_feed = np.zeros((objNum, pc_rect.shape[1], 3))
@@ -241,7 +243,7 @@ def test_segmentation(input_pc, input_centroid, sess, ops):
     batch_yolo_to_feed = np.zeros((objNum,2))
 #    sess, ops = get_session_and_ops(batch_size=batch_size, num_point=pc_rect.shape[1])
     print("Pre-processing in {:.2f}s".format(time.time() - t0))
-    t0 = time.time()
+#    t0 = time.time()
     for batch_idx in range(objNum):
         print('Item idx: %d' % (batch_idx))
 
@@ -260,11 +262,10 @@ def test_segmentation(input_pc, input_centroid, sess, ops):
         batch_sclass_pred, batch_sres_pred, batch_scores = \
             inference(sess, ops, batch_data_to_feed,
                 batch_one_hot_to_feed, batch_yolo_to_feed, batch_size=batch_size)
-    print("Inference done;")
-    print("Inference + rectifying in {:.2f}s".format(time.time() - t0))
+#    print("Inference + rectifying done in {:.2f}s".format(time.time() - t0))
 #    print("Batch segmentation logits: ", batch_output)
     if (1 not in batch_output):
-        print("Segmentation failed: no pedestrain found!")
+        print("PointNet: I did not see anyone!")
         return
     else:
 #        print("Pedestrain found! Number of points: ", (batch_output==1).sum()) #(pc[0,:,2]<4).sum())
@@ -291,10 +292,10 @@ def test_segmentation(input_pc, input_centroid, sess, ops):
         
 #        visualizePNwithBox(x_vals, y_vals, z_vals, pc[0, :, :], vertices, True)
         
-        if (False):
+        if (False): # Offline Testing
             fig = mlab.figure(figure=None, bgcolor=(0,0,0),fgcolor=None, engine=None, size=(800, 500))
-#        verts = np.fromfile("/localhome/sxu/Desktop/MA/frustum-pointnets-master/dataset/xtion/rsVerts3.bin", dtype=np.float).reshape(-1, 3)
-            draw_lidar_with_boxes(pc[1,...], vertices, fig)
+            verts = np.fromfile("/localhome/sxu/Desktop/MA/frustum-pointnets-master/dataset/xtion/rsVerts3.bin", dtype=np.float).reshape(-1, 3)
+            draw_lidar_with_boxes(verts, vertices, fig)
 #        draw_boxes3d(vertices, fig)
             input("ENTER TO QUIT TESTING")
         return vertices
