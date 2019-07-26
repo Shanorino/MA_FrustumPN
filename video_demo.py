@@ -261,7 +261,7 @@ with tf.Session(graph=graph) as sess:
                 rois[interestedObjects, :, :] = roi
                 centroid = rsToVelo(verts[center[1], center[0], :].reshape(-1, 3)) # 1x3
                 centroids[interestedObjects, :] = centroid
-                objectTypes [interestedObjects, :] = bbox[5]
+                objectTypes[interestedObjects, :] = bbox[5]
 
         # Draw 2D boxes for the 2D image(from YOLO)
         image = utils.draw_bbox(frame, human_box)
@@ -278,6 +278,7 @@ with tf.Session(graph=graph) as sess:
         
         # 3D Segmentation
         if (rois.shape[0] > 0):
+            # TODO: pass objectTypes here
             box_vertices = test_segmentation(rois, centroids, sess_3d, ops_3d)
         else:
             box_vertices = None
@@ -297,6 +298,7 @@ with tf.Session(graph=graph) as sess:
                 rois.tofile("rsPC3.bin")
                 centroids.tofile("rsCentroid3.bin")
             if (SAVE_VIDEO):
+                cv2.imwrite("2D_"+ str(50-TOTAL_FRAMES) +".jpg", cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
                 org_pc.tofile("Video_Verts_"+ str(50-TOTAL_FRAMES) +".bin")
                 box_vertices.tofile("Video_Boxes_"+ str(50-TOTAL_FRAMES) +".bin")
             TOTAL_FRAMES -= 1    
