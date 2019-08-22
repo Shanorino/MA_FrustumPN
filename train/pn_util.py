@@ -30,13 +30,22 @@ from scipy.spatial import ConvexHull
 
 # Set training configurations
 BATCH_SIZE = 32
-MODEL_PATH = '/localhome/sxu/Desktop/MA/frustum-pointnets-master/train/log_tiny1_100/model.ckpt'
+#MODEL_PATH = '/localhome/sxu/Desktop/MA/frustum-pointnets-master/train/log_tiny2_100/model.ckpt'
+MODEL_PATH = '/localhome/sxu/Desktop/MA/frustum-pointnets-master/train/log_org100/model.ckpt'
 GPU_INDEX = 0
 NUM_POINT = 1024
-MODEL = importlib.import_module('frustum_pointnets_v1_tiny1')
+#MODEL = importlib.import_module('frustum_pointnets_v1_tiny2')
+MODEL = importlib.import_module('frustum_pointnets_v1')
 NUM_CLASSES = 2
 NUM_CHANNEL = 3
 ONE_HOT_TEMPLATE = {'Pedestrian': [0, 1, 0], 'Cyclist': [0, 0, 1], 'Car': [1, 0, 0]} # do not change the order
+LOG_FOUT = open(os.path.join(BASE_DIR, 'speed_test.txt'), 'w')
+global FRAME_TIME
+
+def log_string(out_str):
+    LOG_FOUT.write(out_str+'\n')
+    LOG_FOUT.flush()
+    print(out_str)
 
 def get_session_and_ops(batch_size, num_point):
     ''' Define model graph, load model parameters,
@@ -92,6 +101,7 @@ def softmax(x):
 
 def inference(sess, ops, pc, one_hot_vec, box2d, batch_size):
     ''' Run inference for frustum pointnets in batch mode '''
+    global FRAME_TIME
     assert pc.shape[0]%batch_size == 0
     num_batches = pc.shape[0]/batch_size
     logits = np.zeros((pc.shape[0], pc.shape[1], NUM_CLASSES))
@@ -120,8 +130,8 @@ def inference(sess, ops, pc, one_hot_vec, box2d, batch_size):
                 ep['heading_scores'], ep['heading_residuals'],
                 ep['size_scores'], ep['size_residuals'], ep['stage1_center']],
                 feed_dict=feed_dict)
-            
-        print("PointNets inference for 1 batch (frame) in {:.2f}s".format(time.time() - t1))
+        FRAME_TIME += time.time() - t1
+        print("PointNets inference for 1 batch (frame) in {:.3f}s".format(time.time() - t1))
 #        print ("T-Net Stage1 Center: ", stage1)
         logits[i*batch_size:(i+1)*batch_size,...] = batch_logits
         centers[i*batch_size:(i+1)*batch_size,...] = batch_centers
@@ -182,10 +192,11 @@ def test_segmentation(input_pc, input_centroid, sess, ops):
         load PointCloud from a VTK file
     '''
     vertices_list = []
-
+    global FRAME_TIME
+    FRAME_TIME = 0
     # load PointCloud here    
     if input_pc is None:
-        pc = np.fromfile("/localhome/sxu/Desktop/MA/frustum-pointnets-master/dataset/xtion/rsPC3.bin", dtype=np.float).reshape(-1, 2048, 3)
+        pc = np.fromfile("/localhome/sxu/Desktop/MA/frustum-pointnets-master/dataset/xtion/rsPC3rrrrrr.bin", dtype=np.float).reshape(-1, 2048, 3)
     else:
         pc = input_pc#[0, :, :]
     # Cropping-trick
@@ -196,7 +207,7 @@ def test_segmentation(input_pc, input_centroid, sess, ops):
 #    pc = pc[np.random.randint(pc.shape[0], size=1024), 0:3] #10%: size=int(pc.shape[0]/10)
     # Get 3d centroid from 2d detection
     if input_centroid is None:
-        pc_centroid = np.fromfile("/localhome/sxu/Desktop/MA/frustum-pointnets-master/dataset/xtion/rsCentroid3.bin", dtype=np.float).reshape(-1, 3)
+        pc_centroid = np.fromfile("/localhome/sxu/Desktop/MA/frustum-pointnets-master/dataset/xtion/rsCentroid3rrrrrr.bin", dtype=np.float).reshape(-1, 3)
     else:
         pc_centroid = input_centroid
         
@@ -242,14 +253,15 @@ def test_segmentation(input_pc, input_centroid, sess, ops):
     batch_one_hot_to_feed = np.zeros((objNum, 3))
     batch_yolo_to_feed = np.zeros((objNum,2))
 #    sess, ops = get_session_and_ops(batch_size=batch_size, num_point=pc_rect.shape[1])
-    print("Pre-processing in {:.2f}s".format(time.time() - t0))
+    FRAME_TIME += time.time() - t0
+    print("Pre-processing in {:.3f}s".format(time.time() - t0))
 #    t0 = time.time()
     for batch_idx in range(objNum):
         print('Item idx: %d' % (batch_idx))
 
         batch_data = pc_rect[batch_idx, :, :]  # problems: 1.centroid 2.scale
-        batch_one_hot_vec = np.asarray([0,1,0]) #pedestrian
-        batch_yolo = np.asarray([352,376])
+        batch_one_hot_vec = np.asarray(ONE_HOT_TEMPLATE['Pedestrian']) #pedestrian 
+        batch_yolo = np.asarray([190,240])
         
         batch_data_to_feed[batch_idx,...] = batch_data
         batch_one_hot_to_feed[batch_idx,:] = batch_one_hot_vec
@@ -269,11 +281,15 @@ def test_segmentation(input_pc, input_centroid, sess, ops):
         return
     else:
 #        print("Pedestrain found! Number of points: ", (batch_output==1).sum()) #(pc[0,:,2]<4).sum())
-        print("Shape: ", batch_output.shape)
+#        print("Shape: ", batch_output.shape)
 #        print("Batch predicted center (in rect cam): ", batch_center_pred) #Bx3
         print("Batch predicted center (in Velo): ", cali.project_rect_to_velo(batch_center_pred))
-#        print("Batch heading angle(degree): ", batch_sclass_pred*30, "+", batch_hres_pred*57)
-        boxParams = g_type_mean_size['Pedestrian'] + batch_sres_pred  # could be wrong here?
+        print("Batch heading angle(degree): ", batch_hclass_pred*30, "+", batch_hres_pred*57)
+        print("Batch heading angle(rad): ", batch_hclass_pred*np.pi/6, "+", batch_hres_pred)
+        print ("classification from PN: ", batch_sclass_pred)
+        boxParams = np.asarray(list(g_type_mean_size.values()))[batch_sclass_pred] + batch_sres_pred
+#        boxParams = np.asarray(list(g_type_mean_size.values()))[[4,3]] + batch_sres_pred
+#        boxParams = g_type_mean_size['Pedestrian'] + batch_sres_pred  # could be wrong here?
         print("3D box sizes: ", boxParams)
     
         # Mask the points from Seg-PN
@@ -284,7 +300,7 @@ def test_segmentation(input_pc, input_centroid, sess, ops):
 
         # Draw 3D box
         
-        vertices = get3dBoxVertices(cali.project_rect_to_velo(batch_center_pred), boxParams, frustum_angle, np.pi/6 * batch_hclass_pred)
+        vertices = get3dBoxVertices(cali.project_rect_to_velo(batch_center_pred), boxParams, frustum_angle, -np.pi/6 * batch_hclass_pred - batch_hres_pred)
 
 #        print ("vertices: ", vertices)
 #        print ("Frustum angle in rect: ", frustum_angle)
@@ -292,12 +308,15 @@ def test_segmentation(input_pc, input_centroid, sess, ops):
         
 #        visualizePNwithBox(x_vals, y_vals, z_vals, pc[0, :, :], vertices, True)
         
-        if (False): # Offline Testing
+        if (True): # Offline Testing
             fig = mlab.figure(figure=None, bgcolor=(0,0,0),fgcolor=None, engine=None, size=(800, 500))
-            verts = np.fromfile("/localhome/sxu/Desktop/MA/frustum-pointnets-master/dataset/xtion/rsVerts3.bin", dtype=np.float).reshape(-1, 3)
+            verts = np.fromfile("/localhome/sxu/Desktop/MA/frustum-pointnets-master/dataset/xtion/rsVerts3rrrrrr.bin", dtype=np.float).reshape(-1, 3)
             draw_lidar_with_boxes(verts, vertices, fig)
-#        draw_boxes3d(vertices, fig)
+            draw_boxes3d(vertices, fig, draw_text=False)
+            print ("FRAME_TIME: ", FRAME_TIME)
+            log_string("FRAME_TIME: " + str(FRAME_TIME))
             input("ENTER TO QUIT TESTING")
+        log_string("FPS: " + str(1/(FRAME_TIME+0.00001)))
         return vertices
 
 def visualizePNwithBox(masked_x, masked_y, masked_z, pc, verticess, draw=False):
@@ -449,7 +468,7 @@ def draw_lidar_with_boxes(pc, vertices, fig=None, color=None):
     mlab.plot3d([0, axes[1,0]], [0, axes[1,1]], [0, axes[1,2]], color=(0,1,0), tube_radius=None, figure=fig)
     mlab.plot3d([0, axes[2,0]], [0, axes[2,1]], [0, axes[2,2]], color=(0,0,1), tube_radius=None, figure=fig)
     mlab.view(azimuth=180, elevation=70, focalpoint=[ 12.0909996 , -1.04700089, -2.03249991], distance=62.0, figure=fig)
-    draw_boxes3d(vertices, fig)
+#    draw_boxes3d(vertices, fig, draw_text=False)
     return fig
 
 def draw_boxes3d(gt_boxes3d, fig, color=(1,1,1), line_width=1, draw_text=True, text_scale=(1,1,1), color_list=None):
