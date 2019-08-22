@@ -21,6 +21,7 @@ import importlib.util
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(BASE_DIR)
+FPN_DIR = '/localhome/sxu/Desktop/MA/frustum-pointnets-master/'
 sys.path.append(BASE_DIR)
 sys.path.append(os.path.join(ROOT_DIR, 'models'))
 from matplotlib import pyplot
@@ -31,7 +32,7 @@ from scipy.spatial import ConvexHull
 # Set training configurations
 BATCH_SIZE = 32
 #MODEL_PATH = '/localhome/sxu/Desktop/MA/frustum-pointnets-master/train/log_tiny2_100/model.ckpt'
-MODEL_PATH = '/localhome/sxu/Desktop/MA/frustum-pointnets-master/train/log_org100/model.ckpt'
+MODEL_PATH = FPN_DIR + 'train/log_org100/model.ckpt'
 GPU_INDEX = 0
 NUM_POINT = 1024
 #MODEL = importlib.import_module('frustum_pointnets_v1_tiny2')
@@ -196,7 +197,7 @@ def test_segmentation(input_pc, input_centroid, sess, ops):
     FRAME_TIME = 0
     # load PointCloud here    
     if input_pc is None:
-        pc = np.fromfile("/localhome/sxu/Desktop/MA/frustum-pointnets-master/dataset/xtion/rsPC3rrrrrr.bin", dtype=np.float).reshape(-1, 2048, 3)
+        pc = np.fromfile(FPN_DIR + "dataset/xtion/rsPC3rrrrrr.bin", dtype=np.float).reshape(-1, 2048, 3)
     else:
         pc = input_pc#[0, :, :]
     # Cropping-trick
@@ -207,13 +208,13 @@ def test_segmentation(input_pc, input_centroid, sess, ops):
 #    pc = pc[np.random.randint(pc.shape[0], size=1024), 0:3] #10%: size=int(pc.shape[0]/10)
     # Get 3d centroid from 2d detection
     if input_centroid is None:
-        pc_centroid = np.fromfile("/localhome/sxu/Desktop/MA/frustum-pointnets-master/dataset/xtion/rsCentroid3rrrrrr.bin", dtype=np.float).reshape(-1, 3)
+        pc_centroid = np.fromfile(FPN_DIR + "dataset/xtion/rsCentroid3rrrrrr.bin", dtype=np.float).reshape(-1, 3)
     else:
         pc_centroid = input_centroid
         
     # Manual calibration
-    utils = module_from_file("utils", "/localhome/sxu/Desktop/MA/frustum-pointnets-master/kitti/kitti_util.py")
-    cali = utils.Calibration('/localhome/sxu/Desktop/MA/frustum-pointnets-master/dataset/KITTI/object/training/calib/000002.txt')
+    utils = module_from_file("utils", FPN_DIR + "kitti/kitti_util.py")
+    cali = utils.Calibration(FPN_DIR + 'dataset/KITTI/object/training/calib/000002.txt')
     
     t0 = time.time()
     objNum = pc.shape[0] # How many objects are detected by 2D detection
@@ -260,6 +261,7 @@ def test_segmentation(input_pc, input_centroid, sess, ops):
         print('Item idx: %d' % (batch_idx))
 
         batch_data = pc_rect[batch_idx, :, :]  # problems: 1.centroid 2.scale
+#        batch_one_hot_vec = cocoIndexToOnehot(fffffffff[batch_idx]) # for multiple instances
         batch_one_hot_vec = np.asarray(ONE_HOT_TEMPLATE['Pedestrian']) #pedestrian 
         batch_yolo = np.asarray([190,240])
         
@@ -284,8 +286,8 @@ def test_segmentation(input_pc, input_centroid, sess, ops):
 #        print("Shape: ", batch_output.shape)
 #        print("Batch predicted center (in rect cam): ", batch_center_pred) #Bx3
         print("Batch predicted center (in Velo): ", cali.project_rect_to_velo(batch_center_pred))
-        print("Batch heading angle(degree): ", batch_hclass_pred*30, "+", batch_hres_pred*57)
-        print("Batch heading angle(rad): ", batch_hclass_pred*np.pi/6, "+", batch_hres_pred)
+#        print("Batch heading angle(degree): ", batch_hclass_pred*30, "+", batch_hres_pred*57)
+#        print("Batch heading angle(rad): ", batch_hclass_pred*np.pi/6, "+", batch_hres_pred)
         print ("classification from PN: ", batch_sclass_pred)
         boxParams = np.asarray(list(g_type_mean_size.values()))[batch_sclass_pred] + batch_sres_pred
 #        boxParams = np.asarray(list(g_type_mean_size.values()))[[4,3]] + batch_sres_pred
@@ -310,7 +312,7 @@ def test_segmentation(input_pc, input_centroid, sess, ops):
         
         if (True): # Offline Testing
             fig = mlab.figure(figure=None, bgcolor=(0,0,0),fgcolor=None, engine=None, size=(800, 500))
-            verts = np.fromfile("/localhome/sxu/Desktop/MA/frustum-pointnets-master/dataset/xtion/rsVerts3rrrrrr.bin", dtype=np.float).reshape(-1, 3)
+            verts = np.fromfile(FPN_DIR + "dataset/xtion/rsVerts3rrrrrr.bin", dtype=np.float).reshape(-1, 3)
             draw_lidar_with_boxes(verts, vertices, fig)
             draw_boxes3d(vertices, fig, draw_text=False)
             print ("FRAME_TIME: ", FRAME_TIME)
@@ -513,3 +515,12 @@ def crop_from_3dbox(pc, vertices):
             if np.array_equal(new_hull.vertices, hull.vertices):
                 color[i] = 9
     return color
+
+def cocoIndexToOnehot(index):
+    onehotArray = np.asarray(list(ONE_HOT_TEMPLATE.values()))
+    if index == 0:
+        return onehotArray[0]
+    if index == 2:
+        return onehotArray[2]
+    else:
+        return onehotArray[1]
