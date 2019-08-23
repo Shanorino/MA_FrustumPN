@@ -40,44 +40,42 @@ SAVE_VIDEO = False
 
 DEMO_MODE = input("SELECT MODE: \n" + 
                  "0) PURE DEBUG: Save nothing\n" +
-                 "1) ROBOT DEBUG: Save the 3D bounding boxes and PointClouds\n" +
-                 "2) ROBOT DEBUG: Save the ROIs and PCs for offline segmentation & 3D prediction\n" +
-                 "3) COMPUTER DEBUG: Only visualize 2D boxes and 3D boxes without saving\n" +
-                 "4) COMPUTER DEBUG: Visualize and save everything\n")
-if (DEMO_MODE == "1"):
+                 "1) SAVE Video\n" +
+                 "2) SAVE PointCloud\n" +
+                 "3) VISUALIZE YOLO\n" +
+                 "4) VISUALIZE 3D\n")
+if (DEMO_MODE.__contains__("1")):
     SAVE_VIDEO = True
-elif (DEMO_MODE == "2"):
+if (DEMO_MODE.__contains__("2")):
     SAVE_POINTCLOUD = True
-elif (DEMO_MODE == "3"):
+if (DEMO_MODE.__contains__("3")):
     VISUALIZE_YOLO = True
+if (DEMO_MODE.__contains__("4")):
     VISUALIZE_BOX = True
-elif (DEMO_MODE == "4"):
-    VISUALIZE_YOLO = True
-    VISUALIZE_BOX = True
-    SAVE_POINTCLOUD = True
     
 def draw_lidar_with_boxes(pc, vertices, fig=None, color=None):
     ''' Draw lidar points. simplest set up. '''
     if fig is None:
         fig = mlab.figure(figure=None, bgcolor=(0,0,0), fgcolor=None, engine=None, size=(800, 500))
-    if color is None: 
+    if color is None and vertices is not None: 
         color = crop_from_3dbox(pc, vertices)
-#        color = pc[:,0]
+    else:
+        color = pc[:,0]
     #draw points
     mlab.points3d(pc[:,0], pc[:,1], pc[:,2], color, color=None, mode='point', colormap = 'gnuplot', scale_factor=1, figure=fig)
     #draw origin
-    mlab.points3d(0, 0, 0, color=(1,1,1), mode='sphere', scale_factor=0.2)
+#    mlab.points3d(0, 0, 0, color=(1,1,1), mode='sphere', scale_factor=0.2)
     #draw axis
     axes=np.array([
         [2.,0.,0.,0.],
         [0.,2.,0.,0.],
         [0.,0.,2.,0.],
     ],dtype=np.float64)
-    mlab.plot3d([0, axes[0,0]], [0, axes[0,1]], [0, axes[0,2]], color=(1,0,0), tube_radius=None, figure=fig)
-    mlab.plot3d([0, axes[1,0]], [0, axes[1,1]], [0, axes[1,2]], color=(0,1,0), tube_radius=None, figure=fig)
-    mlab.plot3d([0, axes[2,0]], [0, axes[2,1]], [0, axes[2,2]], color=(0,0,1), tube_radius=None, figure=fig)
-    
-    draw_boxes3d(vertices, fig)
+#    mlab.plot3d([0, axes[0,0]], [0, axes[0,1]], [0, axes[0,2]], color=(1,0,0), tube_radius=None, figure=fig)
+#    mlab.plot3d([0, axes[1,0]], [0, axes[1,1]], [0, axes[1,2]], color=(0,1,0), tube_radius=None, figure=fig)
+#    mlab.plot3d([0, axes[2,0]], [0, axes[2,1]], [0, axes[2,2]], color=(0,0,1), tube_radius=None, figure=fig)
+    if vertices is not None:
+        draw_boxes3d(vertices, fig)
     
     mlab.view(azimuth=180, elevation=80, focalpoint=[ 12.0909996 , -1.04700089, -2.03249991], distance=19.0, figure=fig)
     return fig
@@ -100,7 +98,7 @@ def draw_boxes3d(gt_boxes3d, fig, color=(1,1,1), line_width=1, draw_text=True, t
         b = gt_boxes3d[n]
         if color_list is not None:
             color = color_list[n] 
-        if draw_text: mlab.text3d(b[4,0], b[4,1], b[4,2], '%d'%n, scale=text_scale, color=color, figure=fig)
+#        if draw_text: mlab.text3d(b[4,0], b[4,1], b[4,2], '%d'%n, scale=text_scale, color=color, figure=fig)
         for k in range(0,4):
             #http://docs.enthought.com/mayavi/mayavi/auto/mlab_helper_functions.html
             i,j=k,(k+1)%4
@@ -131,7 +129,7 @@ def rsToVelo(pc):
                          [0,     0,    -1.1], 
                          [1.1,   0,    0]])
     
-    tl_matrix = np.array([0, 0, -1.1])
+    tl_matrix = np.array([0, 0, -1.2])
     return (np.dot(pc, t_matrix) + tl_matrix)
 
 # Randomly collect (N) points; z_range (front & rear) is for the outdoor
@@ -205,6 +203,7 @@ with tf.Session(graph=graph) as sess:
         # Feed into YOLO
         image = Image.fromarray(color_image)
         frame = cv2.cvtColor(color_image, cv2.COLOR_BGR2RGB)
+#        frameBU = np.copy(frame)
         w = rs.video_frame(depth_frame).width
         h = rs.video_frame(depth_frame).height
         verts = np.asanyarray(points.get_vertices()).view(np.float32).reshape(h, w, 3) # Uncropped PC
@@ -232,11 +231,6 @@ with tf.Session(graph=graph) as sess:
         for i, bbox in enumerate(bboxes):
             if (bbox[5] == 0 and bbox[4] >= 0.5):
                 interestedObjects += 1
-        if (interestedObjects == 0):
-            print ("YOLO: I did not see anyone!")
-            continue
-        else:
-            print ("YOLO: Found", interestedObjects, "people")
         
         rois = np.zeros((interestedObjects, SAMPLE_NUM, 3)) # BxNx3
         centroids = np.zeros((interestedObjects, 3))  # Bx3
@@ -251,6 +245,12 @@ with tf.Session(graph=graph) as sess:
                 y_max = int(bbox[3])
                 center = [int((x_min+x_max)/2), int((y_min+y_max)/2)]
                 roi = verts[y_min:y_max, x_min:x_max, :].reshape(-1, 3)
+#                fig = mlab.figure(figure=None, bgcolor=(0,0,0),fgcolor=None, engine=None, size=(800, 500))
+#                draw_lidar_with_boxes(rsToVelo(collectPoints(roi, SAMPLE_NUM)), None, fig)
+#                input ("teeeeeeeeest")
+#                fig2 = mlab.figure(figure=None, bgcolor=(0,0,0),fgcolor=None, engine=None, size=(800, 500))
+#                draw_lidar_with_boxes(rsToVelo(collectPoints(roi, SAMPLE_NUM)), None, fig2)
+#                input ("test2")
                 # Only save the ROI if there are enough valid points
                 if not (validROI(roi, 6)):
                     rois = np.delete(rois, interestedObjects, axis=0)
@@ -258,11 +258,17 @@ with tf.Session(graph=graph) as sess:
                     objectTypes = np.delete(objectTypes, interestedObjects, axis=0)
                     continue
                 roi = rsToVelo(collectPoints(roi, SAMPLE_NUM)) # 2048x3
+#                draw_lidar_with_boxes(np.asarray(roi), None, None)
                 rois[interestedObjects, :, :] = roi
                 centroid = rsToVelo(verts[center[1], center[0], :].reshape(-1, 3)) # 1x3
                 centroids[interestedObjects, :] = centroid
                 objectTypes[interestedObjects, :] = bbox[5]
 
+        if (interestedObjects == 0):
+            print ("YOLO: I did not see anyone!")
+            continue
+        else:
+            print ("YOLO: Found", np.sum(objectTypes==0), "pedestrians", np.sum(objectTypes==2), "cars", np.sum(objectTypes==1), "bicycles")
         # Draw 2D boxes for the 2D image(from YOLO)
         image = utils.draw_bbox(frame, human_box)
         # 2D Visualize
@@ -272,6 +278,7 @@ with tf.Session(graph=graph) as sess:
             result = np.asarray(image)
             info = "time: %.2f ms" %(1000*exec_time)
             cv2.namedWindow("result", cv2.WINDOW_AUTOSIZE)
+#            result = cv2.cvtColor(frameBU, cv2.COLOR_RGB2BGR)
             result = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
             cv2.imshow("result", result)
             if cv2.waitKey(1) & 0xFF == ord('q'): break
@@ -279,19 +286,23 @@ with tf.Session(graph=graph) as sess:
         # 3D Segmentation
         if (rois.shape[0] > 0):
             # TODO: pass objectTypes here
-            box_vertices = test_segmentation(rois, centroids, sess_3d, ops_3d)
+            box_vertices = test_segmentation(rois, centroids, sess_3d, ops_3d, objectTypes)
         else:
             box_vertices = None
         if (box_vertices is not None):
 #            time.sleep(1)
-            org_pc = rsToVelo(collectPoints(verts.reshape(-1,3), 5000, 15))
+            org_pc = rsToVelo(collectPoints(verts.reshape(-1,3), 8000, 15))
             if (TOTAL_FRAMES < 0):
                 # reset the frames (overwrite the old ones)
                 TOTAL_FRAMES = 50
                 input ("ENTER")
             if (VISUALIZE_BOX):
                 fig = mlab.figure(figure=None, bgcolor=(0,0,0),fgcolor=None, engine=None, size=(800, 500))
-                draw_lidar_with_boxes(org_pc, box_vertices, fig)
+                draw_lidar_with_boxes(org_pc, None, fig)
+                fig2 = mlab.figure(figure=None, bgcolor=(0,0,0),fgcolor=None, engine=None, size=(800, 500))
+                org_pc2 = rsToVelo(collectPoints(verts.reshape(-1,3), 2048, 15))
+                draw_lidar_with_boxes(org_pc2, box_vertices, fig2)
+                input ("ENTER")
 #            mlab.close()
             if (SAVE_POINTCLOUD):
                 org_pc.tofile("rsVerts3.bin")
