@@ -188,7 +188,7 @@ def module_from_file(module_name, file_path):
     spec.loader.exec_module(module)
     return module    
     
-def test_segmentation(input_pc, input_centroid, sess, ops):
+def test_segmentation(input_pc, input_centroid, sess, ops, objectTypes=None):
     ''' Test segmentation pointents with frustum point clouds.
         load PointCloud from a VTK file
     '''
@@ -261,8 +261,10 @@ def test_segmentation(input_pc, input_centroid, sess, ops):
         print('Item idx: %d' % (batch_idx))
 
         batch_data = pc_rect[batch_idx, :, :]  # problems: 1.centroid 2.scale
-#        batch_one_hot_vec = cocoIndexToOnehot(fffffffff[batch_idx]) # for multiple instances
-        batch_one_hot_vec = np.asarray(ONE_HOT_TEMPLATE['Pedestrian']) #pedestrian 
+        if (objectTypes is not None):
+            batch_one_hot_vec = cocoIndexToOnehot(objectTypes[batch_idx]) # for multiple instances
+        else:
+            batch_one_hot_vec = np.asarray(ONE_HOT_TEMPLATE['Pedestrian']) #pedestrian 
         batch_yolo = np.asarray([190,240])
         
         batch_data_to_feed[batch_idx,...] = batch_data
