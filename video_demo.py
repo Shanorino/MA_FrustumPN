@@ -31,7 +31,12 @@ num_classes     = 80
 input_size      = 416
 graph           = tf.Graph()
 return_tensors  = utils.read_pb_return_tensors(graph, pb_file, return_elements)
+# number of frames to save in mode 1, 2
 TOTAL_FRAMES = 50
+# number of points to sample and save in each point cloud (has nothing to do with the network)
+SAMPLE_ORG_NUM = 8000
+PC_TO_SAVE = np.zeros((TOTAL_FRAMES, SAMPLE_ORG_NUM, 3))
+BOX_TO_SAVE = []
 
 VISUALIZE_YOLO = False
 VISUALIZE_BOX = False
@@ -135,7 +140,7 @@ def rsToVelo(pc):
 # Randomly collect (N) points; z_range (front & rear) is for the outdoor
 def collectPoints(pc, numPoints, z_range=None):
     # clear empty points first
-    pointCloud = pc[~np.all(pc == 0, axis=1)]
+    pointCloud = pc[~np.all(pc==0, axis=1)]
     # filter out the ridiculous points (e.g. height=20m)
     pointCloud = pointCloud[np.where(pointCloud[:,1]<3)]
     if (z_range is not None):
@@ -151,8 +156,12 @@ def validROI(roi, z_range):
     print ("Points are too sparse, PLEASE MOVE CLOSER!")
     return False
 
-
-
+def saveRecordedPCandBox(pc, box):
+    print ("\nSaving PointClouds and Boxes, please wait...\n")
+    for i in range(len(pc)):
+        pc[i].tofile("Video_Verts_"+ str(i) +".bin")
+        np.asarray(box[i]).tofile("Video_Boxes_"+ str(i) +".bin")
+    print ("Saving complete!\n")
 
 
 ####################################### Start capturing ###################################
@@ -182,15 +191,7 @@ pc = rs.pointcloud()
 with tf.Session(graph=graph) as sess:
     vid = cv2.VideoCapture(video_path)
     sess_3d, ops_3d = get_session_and_ops(batch_size=1, num_point=2048)
-    while True:
-#        return_value, frame = vid.read()
-#        if return_value:
-#            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-#            image = Image.fromarray(frame)
-#        else:
-#            raise ValueError("No image!")
-        
-        
+    while True:        
         #wait for frames
         frames = pipeline.wait_for_frames()
         aligned_frames = align.process(frames)
@@ -223,23 +224,25 @@ with tf.Session(graph=graph) as sess:
         
         bboxes = utils.postprocess_boxes(pred_bbox, frame_size, input_size, 0.3)
         bboxes = utils.nms(bboxes, 0.45, method='nms')
-        # only draw "person"
+        # only draw person, car, "bike"(Not cyclist)
         SAMPLE_NUM = 2048
         
-        human_box = []
+        roi_box = []
         interestedObjects = 0
         for i, bbox in enumerate(bboxes):
-            if (bbox[5] == 0 and bbox[4] >= 0.5):
+            if (bbox[5] == 0 or bbox[5] == 2 and bbox[4] >= 0.5):
                 interestedObjects += 1
-        
+        if (interestedObjects == 0):
+            print ("YOLO: I did not see anyone!")
+            continue
         rois = np.zeros((interestedObjects, SAMPLE_NUM, 3)) # BxNx3
         centroids = np.zeros((interestedObjects, 3))  # Bx3
         objectTypes = np.zeros((interestedObjects, 1))  # Bx1
         for i, bbox in enumerate(bboxes):
-            if (bbox[5] == 0 and bbox[4] >= 0.5): # 0: person, 2: car , 1: bicycle (NOT cyclist!)
+            if (bbox[5] == 0 or bbox[5] == 2 and bbox[4] >= 0.5): # 0: person, 2: car , 1: bicycle (NOT cyclist!)
                 interestedObjects -= 1
-                human_box.append(bboxes[i])
-                x_min = int(bbox[0])
+                roi_box.append(bboxes[i])
+                x_min = int(bbox[0]) # * YOLO_SCALE
                 x_max = int(bbox[2])
                 y_min = int(bbox[1])
                 y_max = int(bbox[3])
@@ -264,13 +267,9 @@ with tf.Session(graph=graph) as sess:
                 centroids[interestedObjects, :] = centroid
                 objectTypes[interestedObjects, :] = bbox[5]
 
-        if (interestedObjects == 0):
-            print ("YOLO: I did not see anyone!")
-            continue
-        else:
-            print ("YOLO: Found", np.sum(objectTypes==0), "pedestrians", np.sum(objectTypes==2), "cars", np.sum(objectTypes==1), "bicycles")
+        print ("YOLO: Found", np.sum(objectTypes==0), "pedestrians", np.sum(objectTypes==2), "cars", np.sum(objectTypes==1), "bicycles")
         # Draw 2D boxes for the 2D image(from YOLO)
-        image = utils.draw_bbox(frame, human_box)
+        image = utils.draw_bbox(frame, roi_box)
         # 2D Visualize
         if (VISUALIZE_YOLO):
             curr_time = time.time()
@@ -285,33 +284,37 @@ with tf.Session(graph=graph) as sess:
         
         # 3D Segmentation
         if (rois.shape[0] > 0):
-            # TODO: pass objectTypes here
             box_vertices = test_segmentation(rois, centroids, sess_3d, ops_3d, objectTypes)
         else:
             box_vertices = None
         if (box_vertices is not None):
 #            time.sleep(1)
-            org_pc = rsToVelo(collectPoints(verts.reshape(-1,3), 8000, 15))
-            if (TOTAL_FRAMES < 0):
+            if (TOTAL_FRAMES <= 0):
                 # reset the frames (overwrite the old ones)
                 TOTAL_FRAMES = 50
-                input ("ENTER")
+                saveRecordedPCandBox(PC_TO_SAVE, BOX_TO_SAVE)
+                # clear the box list
+                BOX_TO_SAVE = []
+                input ("ENTER TO KEEP RECORDING")
+            org_pc = rsToVelo(collectPoints(verts.reshape(-1,3), SAMPLE_ORG_NUM, 15))
             if (VISUALIZE_BOX):
                 fig = mlab.figure(figure=None, bgcolor=(0,0,0),fgcolor=None, engine=None, size=(800, 500))
-                draw_lidar_with_boxes(org_pc, None, fig)
-                fig2 = mlab.figure(figure=None, bgcolor=(0,0,0),fgcolor=None, engine=None, size=(800, 500))
-                org_pc2 = rsToVelo(collectPoints(verts.reshape(-1,3), 2048, 15))
-                draw_lidar_with_boxes(org_pc2, box_vertices, fig2)
-                input ("ENTER")
+                draw_lidar_with_boxes(org_pc, box_vertices, fig)
+                input ("ENTER TO VISUALIZE BOX")
 #            mlab.close()
             if (SAVE_POINTCLOUD):
                 org_pc.tofile("rsVerts3.bin")
                 rois.tofile("rsPC3.bin")
                 centroids.tofile("rsCentroid3.bin")
             if (SAVE_VIDEO):
+                # no need to save images in local memory because of the size
                 cv2.imwrite("2D_"+ str(50-TOTAL_FRAMES) +".jpg", cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
-                org_pc.tofile("Video_Verts_"+ str(50-TOTAL_FRAMES) +".bin")
-                box_vertices.tofile("Video_Boxes_"+ str(50-TOTAL_FRAMES) +".bin")
+                # save video when the whole process is done, otherwise too much time waste in I/O
+                PC_TO_SAVE[50-TOTAL_FRAMES] = org_pc
+                BOX_TO_SAVE.append(box_vertices)
+#                org_pc.tofile("Video_Verts_"+ str(50-TOTAL_FRAMES) +".bin")
+#                box_vertices.tofile("Video_Boxes_"+ str(50-TOTAL_FRAMES) +".bin")
+            
             TOTAL_FRAMES -= 1    
 
 
