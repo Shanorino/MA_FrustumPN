@@ -32,15 +32,15 @@ from scipy.spatial import ConvexHull
 # Set training configurations
 BATCH_SIZE = 32
 #MODEL_PATH = '/localhome/sxu/Desktop/MA/frustum-pointnets-master/train/log_tiny2_100/model.ckpt'
-MODEL_PATH = FPN_DIR + 'train/log_org100/model.ckpt'
+MODEL_PATH = FPN_DIR + 'train/log_tiny1_100/model.ckpt'
 GPU_INDEX = 0
 NUM_POINT = 1024
 #MODEL = importlib.import_module('frustum_pointnets_v1_tiny2')
-MODEL = importlib.import_module('frustum_pointnets_v1')
+MODEL = importlib.import_module('frustum_pointnets_v1_tiny1')
 NUM_CLASSES = 2
 NUM_CHANNEL = 3
 ONE_HOT_TEMPLATE = {'Pedestrian': [0, 1, 0], 'Cyclist': [0, 0, 1], 'Car': [1, 0, 0]} # do not change the order
-LOG_FOUT = open(os.path.join(BASE_DIR, 'speed_test.txt'), 'w')
+LOG_FOUT = open(os.path.join(ROOT_DIR, 'speed_test.txt'), 'w')
 global FRAME_TIME
 
 def log_string(out_str):
@@ -150,18 +150,6 @@ def inference(sess, ops, pc, one_hot_vec, box2d, batch_size):
         size_prob = np.max(softmax(batch_size_scores),1) # B,
         batch_scores = np.log(mask_mean_prob) + np.log(heading_prob) + np.log(size_prob)
         scores[i*batch_size:(i+1)*batch_size] = batch_scores 
-#    if np.array_equal(logits[0,...], logits[1,...]):
-#        print ("LOGITS(Segmentation) IDENTICAL!")
-#    else:
-#        print ("LOGITS(Segmentation) NOT IDENTICAL!")
-#    if np.array_equal(centers[0,...], centers[1,...]):
-#        print ("CENTER (From T-Net) IDENTICAL!")
-#    else:
-#        print ("CENTER (From T-Net) NOT IDENTICAL!")
-#    if np.array_equal(size_residuals[0,...], size_residuals[1,...]):
-#        print ("SIZE (From Box-Net) IDENTICAL!")
-#    else:
-#        print ("SIZE (From Box-Net) NOT IDENTICAL!")
     # Finished computing scores
     heading_cls = np.argmax(heading_logits, 1) # B
     size_cls = np.argmax(size_logits, 1) # B
@@ -188,13 +176,20 @@ def module_from_file(module_name, file_path):
     spec.loader.exec_module(module)
     return module    
     
-def test_segmentation(input_pc, input_centroid, sess, ops, objectTypes=None):
+def test_segmentation(input_pc, input_centroid, sess, ops, objectBoxes=None, objectTypes=None):
     ''' Test segmentation pointents with frustum point clouds.
-        load PointCloud from a VTK file
+        
+        input_pc: the input point cloud, if is None then reads offline data
+        input_centroid: the input centroid of the point cloud (from 2D detection + 3D projection), if is None then reads offline data
+        sess: the Tensorflow session
+        ops: the placeholders, loss and endpoints
+        objectTypes: the classification result from 2D detector
     '''
     vertices_list = []
     global FRAME_TIME
     FRAME_TIME = 0
+    CAMERA_SCALE = 3
+#    print (objectBoxes)
     # load PointCloud here    
     if input_pc is None:
         pc = np.fromfile(FPN_DIR + "dataset/xtion/rsPC3rrrrrr.bin", dtype=np.float).reshape(-1, 2048, 3)
@@ -265,7 +260,8 @@ def test_segmentation(input_pc, input_centroid, sess, ops, objectTypes=None):
             batch_one_hot_vec = cocoIndexToOnehot(objectTypes[batch_idx]) # for multiple instances
         else:
             batch_one_hot_vec = np.asarray(ONE_HOT_TEMPLATE['Pedestrian']) #pedestrian 
-        batch_yolo = np.asarray([190,240])
+#        batch_yolo = np.asarray([190,240])*CAMERA_SCALE
+        batch_yolo = np.asarray(objectBoxes[batch_idx])*CAMERA_SCALE
         
         batch_data_to_feed[batch_idx,...] = batch_data
         batch_one_hot_to_feed[batch_idx,:] = batch_one_hot_vec
@@ -312,7 +308,7 @@ def test_segmentation(input_pc, input_centroid, sess, ops, objectTypes=None):
         
 #        visualizePNwithBox(x_vals, y_vals, z_vals, pc[0, :, :], vertices, True)
         
-        if (True): # Offline Testing
+        if (False): # Offline Testing
             fig = mlab.figure(figure=None, bgcolor=(0,0,0),fgcolor=None, engine=None, size=(800, 500))
             verts = np.fromfile(FPN_DIR + "dataset/xtion/rsVerts3rrrrrr.bin", dtype=np.float).reshape(-1, 3)
             draw_lidar_with_boxes(verts, vertices, fig)
@@ -518,6 +514,7 @@ def crop_from_3dbox(pc, vertices):
                 color[i] = 9
     return color
 
+# Python 3.6 required for this function!
 def cocoIndexToOnehot(index):
     onehotArray = np.asarray(list(ONE_HOT_TEMPLATE.values()))
     if index == 0:
