@@ -32,8 +32,8 @@ def draw_lidar_with_boxes(pc, vertices, fig=None, color=None):
     mlab.plot3d([0, axes[0,0]], [0, axes[0,1]], [0, axes[0,2]], color=(1,0,0), tube_radius=None, figure=fig)
     mlab.plot3d([0, axes[1,0]], [0, axes[1,1]], [0, axes[1,2]], color=(0,1,0), tube_radius=None, figure=fig)
     mlab.plot3d([0, axes[2,0]], [0, axes[2,1]], [0, axes[2,2]], color=(0,0,1), tube_radius=None, figure=fig)
-    
-    draw_boxes3d(vertices, fig)
+    if vertices is not None:
+        draw_boxes3d(vertices, fig)
     
     mlab.view(azimuth=180, elevation=80, focalpoint=[ 12.0909996 , -1.04700089, -2.03249991], distance=19.0, figure=fig)
     return fig
@@ -77,17 +77,25 @@ def crop_from_3dbox(pc, vertices):
         for i in range(pointNum):
             new_pts = np.vstack((box, pc[i]))
             new_hull = ConvexHull(new_pts)
+            # highlight the object
             if np.array_equal(new_hull.vertices, hull.vertices):
-                color[i] = 10
+                color[i] = max(pc[:, 0]) * 1.5
     return color
 
 ################################ Start Rendering ##################################
 
-for i in range(50):
+for i in range(100):
+#    if i<47:
+#        continue
+#    pc = np.fromfile("/localhome/sxu/Desktop/tensorflow-yolov3/velodyne/velo.bin", dtype=np.float).reshape(-1, 4)
     pc = np.fromfile("/localhome/sxu/Desktop/tensorflow-yolov3/Video_Verts_" +str(i)+ ".bin", dtype=np.float).reshape(-1, 3)
     box = np.fromfile("/localhome/sxu/Desktop/tensorflow-yolov3/Video_Boxes_" +str(i)+ ".bin", dtype=np.float).reshape(-1, 8, 3)
-    fig = mlab.figure(figure=None, bgcolor=(0,0,0),fgcolor=None, engine=None, size=(800, 500))
-    draw_lidar_with_boxes(pc, box, fig)
-    mlab.savefig(filename=str(i)+".png")
+    draw_lidar_with_boxes(pc[:,:3], box, None, None)
+#    input ("ENTER")
+    mlab.savefig(filename="test_videos/3D_"+str(i)+".png")
     mlab.close()
     
+#pc = np.fromfile("/localhome/sxu/Desktop/tensorflow-yolov3/Summit/Video_Verts_1.bin", dtype=np.float).reshape(-1, 3)
+#box = np.fromfile("/localhome/sxu/Desktop/tensorflow-yolov3/Summit/Video_Boxes_1.bin", dtype=np.float).reshape(-1, 8, 3)
+#fig = mlab.figure(figure=None, bgcolor=(0,0,0),fgcolor=None, engine=None, size=(800, 500))
+#draw_lidar_with_boxes(pc, box, fig)

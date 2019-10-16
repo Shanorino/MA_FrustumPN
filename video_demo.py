@@ -32,7 +32,7 @@ input_size      = 416
 graph           = tf.Graph()
 return_tensors  = utils.read_pb_return_tensors(graph, pb_file, return_elements)
 # number of frames to save in mode 1, 2
-TOTAL_FRAMES = 50
+TOTAL_FRAMES = 100
 # number of points to sample and save in each point cloud (has nothing to do with the network)
 SAMPLE_ORG_NUM = 8000
 PC_TO_SAVE = np.zeros((TOTAL_FRAMES, SAMPLE_ORG_NUM, 3))
@@ -163,6 +163,25 @@ def saveRecordedPCandBox(pc, box):
         np.asarray(box[i]).tofile("Video_Boxes_"+ str(i) +".bin")
     print ("Saving complete!\n")
 
+def increase_brightness(img, value=30):
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    h, s, v = cv2.split(hsv)
+    lim = 255 - value
+    v[v > lim] = 255
+    v[v <= lim] += value
+    final_hsv = cv2.merge((h, s, v))
+    img = cv2.cvtColor(final_hsv, cv2.COLOR_HSV2BGR)
+    return img
+
+def decrease_brightness(img, value=30):
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    h, s, v = cv2.split(hsv)
+    lim = value
+    v[v > lim] -= value
+    v[v <= lim] = 1
+    final_hsv = cv2.merge((h, s, v))
+    img = cv2.cvtColor(final_hsv, cv2.COLOR_HSV2BGR)
+    return img
 
 ####################################### Start capturing ###################################
 pipeline = rs.pipeline()
@@ -192,13 +211,14 @@ with tf.Session(graph=graph) as sess:
     vid = cv2.VideoCapture(video_path)
     sess_3d, ops_3d = get_session_and_ops(batch_size=1, num_point=2048)
     while True:        
+        t1 = time.time()
         #wait for frames
         frames = pipeline.wait_for_frames()
         aligned_frames = align.process(frames)
             
         color_aligned_to_depth = aligned_frames.first(rs.stream.color)
         color_image = np.asanyarray(color_aligned_to_depth.get_data())
-        
+#        color_image = decrease_brightness(color_image, 70)
         depth_frame = frames.first(rs.stream.depth)
         points = pc.calculate(depth_frame) 
         # Feed into YOLO
@@ -224,6 +244,7 @@ with tf.Session(graph=graph) as sess:
         
         bboxes = utils.postprocess_boxes(pred_bbox, frame_size, input_size, 0.3)
         bboxes = utils.nms(bboxes, 0.45, method='nms')
+        print("YOLO Inferenced in {:.3f}s".format(time.time() - t1))
         # only draw person, car, "bike"(Not cyclist)
         SAMPLE_NUM = 2048
         
@@ -238,6 +259,7 @@ with tf.Session(graph=graph) as sess:
         rois = np.zeros((interestedObjects, SAMPLE_NUM, 3)) # BxNx3
         centroids = np.zeros((interestedObjects, 3))  # Bx3
         objectTypes = np.zeros((interestedObjects, 1))  # Bx1
+        objectBoxes = np.zeros((interestedObjects, 2))  # Bx2
         for i, bbox in enumerate(bboxes):
             if (bbox[5] == 0 or bbox[5] == 2 and bbox[4] >= 0.5): # 0: person, 2: car , 1: bicycle (NOT cyclist!)
                 interestedObjects -= 1
@@ -266,7 +288,8 @@ with tf.Session(graph=graph) as sess:
                 centroid = rsToVelo(verts[center[1], center[0], :].reshape(-1, 3)) # 1x3
                 centroids[interestedObjects, :] = centroid
                 objectTypes[interestedObjects, :] = bbox[5]
-
+                objectBoxes[interestedObjects, :] = [x_max-x_min, y_max-y_min]
+                
         print ("YOLO: Found", np.sum(objectTypes==0), "pedestrians", np.sum(objectTypes==2), "cars", np.sum(objectTypes==1), "bicycles")
         # Draw 2D boxes for the 2D image(from YOLO)
         image = utils.draw_bbox(frame, roi_box)
@@ -280,18 +303,20 @@ with tf.Session(graph=graph) as sess:
 #            result = cv2.cvtColor(frameBU, cv2.COLOR_RGB2BGR)
             result = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
             cv2.imshow("result", result)
+#            input ("ENTER")
             if cv2.waitKey(1) & 0xFF == ord('q'): break
         
         # 3D Segmentation
         if (rois.shape[0] > 0):
-            box_vertices = test_segmentation(rois, centroids, sess_3d, ops_3d, objectTypes)
+            box_vertices = test_segmentation(rois, centroids, sess_3d, ops_3d, objectBoxes, objectTypes)
         else:
             box_vertices = None
         if (box_vertices is not None):
 #            time.sleep(1)
             if (TOTAL_FRAMES <= 0):
                 # reset the frames (overwrite the old ones)
-                TOTAL_FRAMES = 50
+                TOTAL_FRAMES = 100
+                
                 saveRecordedPCandBox(PC_TO_SAVE, BOX_TO_SAVE)
                 # clear the box list
                 BOX_TO_SAVE = []
@@ -308,9 +333,9 @@ with tf.Session(graph=graph) as sess:
                 centroids.tofile("rsCentroid3.bin")
             if (SAVE_VIDEO):
                 # no need to save images in local memory because of the size
-                cv2.imwrite("2D_"+ str(50-TOTAL_FRAMES) +".jpg", cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+                cv2.imwrite("2D_"+ str(100-TOTAL_FRAMES) +".jpg", cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
                 # save video when the whole process is done, otherwise too much time waste in I/O
-                PC_TO_SAVE[50-TOTAL_FRAMES] = org_pc
+                PC_TO_SAVE[100-TOTAL_FRAMES] = org_pc
                 BOX_TO_SAVE.append(box_vertices)
 #                org_pc.tofile("Video_Verts_"+ str(50-TOTAL_FRAMES) +".bin")
 #                box_vertices.tofile("Video_Boxes_"+ str(50-TOTAL_FRAMES) +".bin")
